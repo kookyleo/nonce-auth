@@ -6,45 +6,45 @@ use crate::HmacSha256;
 use crate::SignedRequest;
 
 /// Client-side nonce manager for generating signed requests.
-/// 
+///
 /// The `NonceClient` is responsible for creating cryptographically signed
 /// requests that can be verified by a `NonceServer`. It provides a lightweight,
 /// stateless interface for generating nonces and signatures without requiring
 /// any database or persistent storage.
-/// 
+///
 /// # Security Features
-/// 
+///
 /// - **HMAC-SHA256 Signing**: Uses industry-standard HMAC with SHA256 for signatures
 /// - **UUID Nonces**: Generates cryptographically random UUIDs for nonces
 /// - **Timestamp Inclusion**: Includes current timestamp to prevent old request replay
 /// - **Stateless Design**: No local state or storage required
-/// 
+///
 /// # Usage Pattern
-/// 
+///
 /// The typical usage pattern is:
 /// 1. Create a client with a shared secret
 /// 2. Generate signed requests as needed
 /// 3. Send the signed request to the server for verification
-/// 
+///
 /// # Example
-/// 
+///
 /// ```rust
 /// use nonce_auth::NonceClient;
-/// 
+///
 /// // Create a client with a shared secret
 /// let client = NonceClient::new(b"my_shared_secret");
-/// 
+///
 /// // Generate a signed request
 /// let request = client.create_signed_request().unwrap();
-/// 
+///
 /// // The request contains timestamp, nonce, and signature
 /// println!("Timestamp: {}", request.timestamp);
 /// println!("Nonce: {}", request.nonce);
 /// println!("Signature: {}", request.signature);
 /// ```
-/// 
+///
 /// # Thread Safety
-/// 
+///
 /// `NonceClient` is thread-safe and can be shared across multiple threads
 /// or used concurrently to generate multiple signed requests.
 pub struct NonceClient {
@@ -55,36 +55,36 @@ pub struct NonceClient {
 
 impl NonceClient {
     /// Creates a new `NonceClient` with the specified secret key.
-    /// 
+    ///
     /// The secret key should be shared between the client and server
     /// and kept confidential. It's used to generate HMAC signatures
     /// that prove the authenticity of requests.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `secret` - The secret key for HMAC signature generation.
     ///   This should match the secret used by the server.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new `NonceClient` instance ready to generate signed requests.
-    /// 
+    ///
     /// # Security Considerations
-    /// 
+    ///
     /// - Use a cryptographically strong secret key (at least 32 bytes recommended)
     /// - Keep the secret key confidential and secure
     /// - Use the same secret key on both client and server
     /// - Consider rotating secret keys periodically
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust
     /// use nonce_auth::NonceClient;
-    /// 
+    ///
     /// // Create with a strong secret key
     /// let secret = b"my_very_secure_secret_key_32_bytes";
     /// let client = NonceClient::new(secret);
-    /// 
+    ///
     /// // Or use a dynamically generated secret
     /// let dynamic_secret = "generated_secret_from_key_exchange".as_bytes();
     /// let client = NonceClient::new(dynamic_secret);
@@ -96,30 +96,30 @@ impl NonceClient {
     }
 
     /// Generates a complete signed request with timestamp, nonce, and signature.
-    /// 
+    ///
     /// This method creates a new signed request that includes:
     /// - Current Unix timestamp (seconds since epoch)
     /// - A randomly generated UUID as the nonce
     /// - An HMAC-SHA256 signature of the timestamp and nonce
-    /// 
+    ///
     /// Each call to this method generates a unique request with a different
     /// nonce and timestamp, ensuring that requests cannot be replayed.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Ok(SignedRequest)` - A complete signed request ready to send to the server
     /// * `Err(NonceError::CryptoError)` - If there's an error in the cryptographic operations
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust
     /// use nonce_auth::NonceClient;
-    /// 
+    ///
     /// let client = NonceClient::new(b"shared_secret");
-    /// 
+    ///
     /// // Generate a signed request
     /// let request = client.create_signed_request().unwrap();
-    /// 
+    ///
     /// // Send to server (example using reqwest)
     /// // let response = reqwest::Client::new()
     /// //     .post("https://api.example.com/protected")
@@ -127,9 +127,9 @@ impl NonceClient {
     /// //     .send()
     /// //     .await?;
     /// ```
-    /// 
+    ///
     /// # Thread Safety
-    /// 
+    ///
     /// This method is thread-safe and can be called concurrently from
     /// multiple threads to generate different signed requests.
     pub fn create_signed_request(&self) -> Result<SignedRequest, NonceError> {
@@ -149,40 +149,40 @@ impl NonceClient {
     }
 
     /// Generates an HMAC-SHA256 signature for the given timestamp and nonce.
-    /// 
+    ///
     /// This method creates a cryptographic signature that proves the authenticity
     /// of the request. The signature is generated by:
     /// 1. Creating an HMAC-SHA256 instance with the secret key
     /// 2. Updating it with the timestamp bytes
     /// 3. Updating it with the nonce bytes
     /// 4. Finalizing and hex-encoding the result
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `timestamp` - The timestamp string to include in the signature
     /// * `nonce` - The nonce string to include in the signature
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Ok(String)` - The hex-encoded HMAC signature
     /// * `Err(NonceError::CryptoError)` - If there's an error in the cryptographic operations
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust
     /// use nonce_auth::NonceClient;
-    /// 
+    ///
     /// let client = NonceClient::new(b"shared_secret");
-    /// 
+    ///
     /// // Generate signature for specific timestamp and nonce
     /// let signature = client.sign("1640995200", "550e8400-e29b-41d4-a716-446655440000").unwrap();
-    /// 
+    ///
     /// // The signature is a 64-character hex string
     /// assert_eq!(signature.len(), 64);
     /// ```
-    /// 
+    ///
     /// # Security Notes
-    /// 
+    ///
     /// - The same timestamp and nonce will always produce the same signature
     /// - Different secrets will produce different signatures for the same inputs
     /// - The signature is deterministic and reproducible
