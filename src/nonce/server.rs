@@ -295,7 +295,7 @@ impl NonceServer {
         let ttl = self.default_ttl;
         tokio::spawn(async move {
             if let Err(e) = Self::cleanup_expired(ttl).await {
-                eprintln!("Failed to clean up expired nonces: {}", e);
+                eprintln!("Failed to clean up expired nonces: {e}");
             }
         });
 

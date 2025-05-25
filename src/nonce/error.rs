@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn test_error_debug() {
         let error = NonceError::DuplicateNonce;
-        let debug_str = format!("{:?}", error);
+        let debug_str = format!("{error:?}");
         assert_eq!(debug_str, "DuplicateNonce");
     }
 
