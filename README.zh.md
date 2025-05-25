@@ -1,7 +1,7 @@
 # Nonce Auth
 
-[![CI](https://github.com/USERNAME/nonce-auth/workflows/CI/badge.svg)](https://github.com/USERNAME/nonce-auth/actions)
-[![codecov](https://codecov.io/gh/USERNAME/nonce-auth/branch/main/graph/badge.svg)](https://codecov.io/gh/USERNAME/nonce-auth)
+[![CI](https://github.com/kookyleo/nonce-auth/workflows/CI/badge.svg)](https://github.com/kookyleo/nonce-auth/actions)
+[![codecov](https://codecov.io/github/kookyleo/nonce-auth/graph/badge.svg?token=69W7PWDELB)](https://codecov.io/github/kookyleo/nonce-auth)
 [![Crates.io](https://img.shields.io/crates/v/nonce-auth.svg)](https://crates.io/crates/nonce-auth)
 [![Documentation](https://docs.rs/nonce-auth/badge.svg)](https://docs.rs/nonce-auth)
 [![License](https://img.shields.io/crates/l/nonce-auth.svg)](https://github.com/USERNAME/nonce-auth#license)
