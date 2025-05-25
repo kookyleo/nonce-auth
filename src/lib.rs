@@ -39,7 +39,7 @@
 //! // Server verifies the request
 //! match server.verify_signed_request(&request, None).await {
 //!     Ok(()) => println!("Request verified successfully"),
-//!     Err(e) => println!("Verification failed: {}", e),
+//!     Err(e) => println!("Verification failed: {e}"),
 //! }
 //! # Ok(())
 //! # }
@@ -126,7 +126,7 @@ type HmacSha256 = Hmac<Sha256>;
 ///
 /// // Serialize to JSON for network transmission
 /// let json = serde_json::to_string(&request).unwrap();
-/// println!("Request JSON: {}", json);
+/// println!("Request JSON: {json}");
 ///
 /// // Deserialize from JSON
 /// let parsed: SignedRequest = serde_json::from_str(&json).unwrap();

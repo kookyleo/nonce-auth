@@ -28,7 +28,7 @@ use thiserror::Error;
 ///     Err(NonceError::DuplicateNonce) => println!("Nonce already used"),
 ///     Err(NonceError::InvalidSignature) => println!("Invalid signature"),
 ///     Err(NonceError::TimestampOutOfWindow) => println!("Request too old"),
-///     Err(e) => println!("Other error: {}", e),
+///     Err(e) => println!("Other error: {e}"),
 /// }
 /// # Ok(())
 /// # }

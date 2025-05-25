@@ -146,7 +146,7 @@ impl NonceServer {
     ///
     /// match server.verify_signed_request(&request, Some("api_v1")).await {
     ///     Ok(()) => println!("Request verified successfully"),
-    ///     Err(e) => println!("Verification failed: {}", e),
+    ///     Err(e) => println!("Verification failed: {e}"),
     /// }
     /// # Ok(())
     /// # }
