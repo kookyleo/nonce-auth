@@ -6,7 +6,6 @@
 
 1. **GitHub Secrets 配置**：
    - `CRATES_IO_TOKEN`: 从 [crates.io](https://crates.io/me) 获取的 API token
-   - `CODECOV_TOKEN`: 从 [Codecov](https://codecov.io) 获取的上传 token
 
 2. **权限要求**：
    - 对仓库有 push 权限
@@ -23,11 +22,8 @@ git pull origin main
 
 # 运行完整测试
 cargo test
-cargo clippy
+cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
-
-# 检查文档
-cargo doc --no-deps --all-features
 ```
 
 ### 2. 更新版本号
@@ -39,11 +35,7 @@ cargo doc --no-deps --all-features
 version = "0.2.0"  # 更新为新版本
 ```
 
-### 3. 更新 CHANGELOG（可选）
-
-如果有 `CHANGELOG.md` 文件，添加新版本的变更记录。
-
-### 4. 提交变更
+### 3. 提交变更
 
 ```bash
 git add Cargo.toml
@@ -51,7 +43,7 @@ git commit -m "Bump version to 0.2.0"
 git push origin main
 ```
 
-### 5. 创建并推送 tag
+### 4. 创建并推送 tag
 
 ```bash
 # 创建 tag（必须以 'v' 开头）
@@ -61,7 +53,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-### 6. 自动发布流程
+### 5. 自动发布流程
 
 推送 tag 后，GitHub Actions 会自动：
 
@@ -78,18 +70,6 @@ git push origin v0.2.0
 - **MAJOR**: 不兼容的 API 变更
 - **MINOR**: 向后兼容的功能添加
 - **PATCH**: 向后兼容的问题修复
-
-## 发布检查清单
-
-- [ ] 所有测试通过
-- [ ] 代码格式正确 (`cargo fmt`)
-- [ ] 无 clippy 警告
-- [ ] 文档构建成功
-- [ ] 版本号已更新
-- [ ] Tag 已创建并推送
-- [ ] GitHub Actions 工作流成功运行
-- [ ] crates.io 上可以看到新版本
-- [ ] GitHub Release 已创建
 
 ## 故障排除
 
@@ -121,7 +101,3 @@ git push origin v0.2.0
 1. 访问 [crates.io/crates/nonce-auth](https://crates.io/crates/nonce-auth) 确认新版本
 2. 检查 [docs.rs/nonce-auth](https://docs.rs/nonce-auth) 文档是否更新
 3. 验证 GitHub Release 页面
-4. 测试新版本安装：
-   ```bash
-   cargo install nonce-auth --version 0.2.0
-   ``` 
