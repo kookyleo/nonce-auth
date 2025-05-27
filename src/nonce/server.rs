@@ -4,7 +4,7 @@ use turbosql::{Turbosql, execute, select};
 
 use super::{NonceError, record::NonceRecord};
 use crate::HmacSha256;
-use crate::SignedRequest;
+use crate::AuthData;
 
 /// Server-side nonce manager for verifying signed requests and managing nonce storage.
 ///
@@ -106,239 +106,69 @@ impl NonceServer {
         }
     }
 
-    /// Verifies a signed request from a client.
+    /// Verifies authentication data with custom signature data construction.
     ///
-    /// This method performs a comprehensive verification process:
-    /// 1. Validates that the request timestamp is within the allowed time window
-    /// 2. Verifies the HMAC signature using the shared secret
-    /// 3. Checks that the nonce hasn't been used before (prevents replay attacks)
-    /// 4. Stores the nonce to prevent future reuse
+    /// This is the primary verification method that provides maximum flexibility
+    /// by allowing applications to define how the signature data should be
+    /// constructed through a closure.
     ///
     /// # Arguments
     ///
-    /// * `request` - The signed request to verify, containing timestamp, nonce, and signature
-    /// * `context` - Optional context string for nonce scoping. Nonces are isolated per context.
+    /// * `auth_data` - The authentication data containing timestamp, nonce, and signature
+    /// * `context` - Optional context for nonce scoping
+    /// * `signature_builder` - A closure that defines how to build the signature data
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - If the request is valid and verification succeeds
-    /// * `Err(NonceError)` - If verification fails for any reason
-    ///
-    /// # Errors
-    ///
-    /// * `NonceError::TimestampOutOfWindow` - Request timestamp is too old or too far in the future
-    /// * `NonceError::InvalidSignature` - HMAC signature verification failed
-    /// * `NonceError::DuplicateNonce` - Nonce has already been used
-    /// * `NonceError::ExpiredNonce` - Nonce exists but has expired
-    /// * `NonceError::DatabaseError` - Database operation failed
+    /// * `Ok(())` - If the authentication data is valid and has been processed
+    /// * `Err(NonceError)` - If validation fails for any reason
     ///
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::{NonceServer, NonceClient};
+    /// use nonce_auth::{NonceServer, AuthData};
+    /// use std::time::Duration;
+    /// use hmac::Mac;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # NonceServer::init().await?;
-    /// let server = NonceServer::new(b"shared_secret", None, None);
-    /// let client = NonceClient::new(b"shared_secret");
+    /// let server = NonceServer::new(b"secret", None, None);
+    /// let auth_data = AuthData {
+    ///     timestamp: 1234567890,
+    ///     nonce: "unique-nonce".to_string(),
+    ///     signature: "expected-signature".to_string(),
+    /// };
     ///
-    /// let request = client.create_signed_request()?;
-    ///
-    /// match server.verify_signed_request(&request, Some("api_v1")).await {
-    ///     Ok(()) => println!("Request verified successfully"),
-    ///     Err(e) => println!("Verification failed: {e}"),
-    /// }
+    /// // Custom signature including payload and method
+    /// let payload = "request body";
+    /// let method = "POST";
+    /// 
+    /// server.verify_auth_data(&auth_data, None, |mac| {
+    ///     mac.update(auth_data.timestamp.to_string().as_bytes());
+    ///     mac.update(auth_data.nonce.as_bytes());
+    ///     mac.update(payload.as_bytes());
+    ///     mac.update(method.as_bytes());
+    /// }).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn verify_signed_request(
+    pub async fn verify_auth_data<F>(
         &self,
-        request: &SignedRequest,
+        auth_data: &AuthData,
         context: Option<&str>,
-    ) -> Result<(), NonceError> {
+        signature_builder: F,
+    ) -> Result<(), NonceError>
+    where
+        F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
+    {
         // 1. Verify timestamp is within allowed window
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        self.verify_timestamp(auth_data.timestamp)?;
 
-        let time_diff = (now - request.timestamp as i64).unsigned_abs(); // plus or minus the time window
-        if time_diff > self.time_window.as_secs() {
-            return Err(NonceError::TimestampOutOfWindow);
-        }
-
-        // 2. Verify signature
-        self.verify_signature(
-            &request.timestamp.to_string(),
-            &request.nonce,
-            &request.signature,
-        )?;
+        // 2. Verify signature with custom builder
+        self.verify_signature(&auth_data.signature, signature_builder)?;
 
         // 3. Verify nonce is valid and not used
-        self.verify_and_consume_nonce(&request.nonce, context)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Verifies the HMAC signature of a request.
-    ///
-    /// This method reconstructs the expected signature using the same algorithm
-    /// as the client and compares it with the provided signature using a
-    /// constant-time comparison to prevent timing attacks.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp string from the request
-    /// * `nonce` - The nonce string from the request  
-    /// * `signature` - The signature to verify
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the signature is valid
-    /// * `Err(NonceError::InvalidSignature)` - If the signature is invalid
-    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
-    fn verify_signature(
-        &self,
-        timestamp: &str,
-        nonce: &str,
-        signature: &str,
-    ) -> Result<(), NonceError> {
-        let expected_signature = self.sign(timestamp, nonce)?;
-        if expected_signature != signature {
-            return Err(NonceError::InvalidSignature);
-        }
-        Ok(())
-    }
-
-    /// Generates an HMAC-SHA256 signature for the given timestamp and nonce.
-    ///
-    /// This method uses the same signing algorithm as the client to generate
-    /// the expected signature for verification purposes.
-    ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp string to sign
-    /// * `nonce` - The nonce string to sign
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The hex-encoded HMAC signature
-    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
-    fn sign(&self, timestamp: &str, nonce: &str) -> Result<String, NonceError> {
-        let mut mac = HmacSha256::new_from_slice(&self.secret)
-            .map_err(|e| NonceError::CryptoError(e.to_string()))?;
-
-        mac.update(timestamp.as_bytes());
-        mac.update(nonce.as_bytes());
-
-        let result = mac.finalize();
-        let signature = hex::encode(result.into_bytes());
-        Ok(signature)
-    }
-
-    /// Verifies that a nonce is valid and hasn't been used, then marks it as consumed.
-    ///
-    /// This method implements the core replay attack prevention logic:
-    /// 1. Checks if the nonce already exists in the database
-    /// 2. If it exists, determines if it's expired or duplicate
-    /// 3. If it doesn't exist, stores it to prevent future reuse
-    /// 4. Triggers background cleanup of expired nonces
-    ///
-    /// # Arguments
-    ///
-    /// * `nonce` - The nonce string to verify and consume
-    /// * `context` - Optional context for nonce scoping
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the nonce is valid and has been consumed
-    /// * `Err(NonceError)` - If the nonce is invalid, expired, or already used
-    async fn verify_and_consume_nonce(
-        &self,
-        nonce: &str,
-        context: Option<&str>,
-    ) -> Result<(), NonceError> {
-        // Check if nonce already exists (has been used)
-        let existing_records: Vec<NonceRecord> = if let Some(ctx) = context {
-            select!(
-                Vec<NonceRecord>
-                "WHERE nonce = ? AND context = ?",
-                nonce, ctx
-            )?
-        } else {
-            select!(
-                Vec<NonceRecord>
-                "WHERE nonce = ? AND context IS NULL",
-                nonce
-            )?
-        };
-
-        if !existing_records.is_empty() {
-            // Check if it's expired
-            if existing_records[0].is_expired(self.default_ttl) {
-                return Err(NonceError::ExpiredNonce);
-            }
-            return Err(NonceError::DuplicateNonce);
-        }
-
-        // Store the nonce to mark it as used
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let record = NonceRecord::new(nonce.to_string(), now, context.map(|s| s.to_string()));
-        record.insert()?;
-
-        // Clean up expired nonces in the background
-        let ttl = self.default_ttl;
-        tokio::spawn(async move {
-            if let Err(e) = Self::cleanup_expired(ttl).await {
-                eprintln!("Failed to clean up expired nonces: {e}");
-            }
-        });
-
-        Ok(())
-    }
-
-    /// Cleans up expired nonce records from the database.
-    ///
-    /// This method removes all nonce records that are older than the specified TTL.
-    /// It's called automatically in the background after each nonce verification,
-    /// but can also be called manually for maintenance purposes.
-    ///
-    /// # Arguments
-    ///
-    /// * `ttl` - The time-to-live duration. Records older than this will be deleted.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If cleanup completed successfully
-    /// * `Err(NonceError::DatabaseError)` - If there was a database error during cleanup
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use nonce_auth::NonceServer;
-    /// use std::time::Duration;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # NonceServer::init().await?;
-    /// // Manual cleanup of nonces older than 1 hour
-    /// NonceServer::cleanup_expired(Duration::from_secs(3600)).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn cleanup_expired(ttl: Duration) -> Result<(), NonceError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let cutoff_time = now - ttl.as_secs() as i64;
-
-        execute!("DELETE FROM noncerecord WHERE created_at <= ?", cutoff_time)?;
+        self.verify_and_consume_nonce(&auth_data.nonce, context).await?;
 
         Ok(())
     }
@@ -413,6 +243,186 @@ impl NonceServer {
         Ok(())
     }
 
+    /// Verifies timestamp is within the allowed window.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp to verify (seconds since Unix epoch)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the timestamp is within the allowed window
+    /// * `Err(NonceError::TimestampOutOfWindow)` - If the timestamp is too old or too far in the future
+    pub(crate) fn verify_timestamp(&self, timestamp: u64) -> Result<(), NonceError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let time_diff = (now - timestamp as i64).unsigned_abs();
+        if time_diff > self.time_window.as_secs() {
+            return Err(NonceError::TimestampOutOfWindow);
+        }
+        Ok(())
+    }
+
+    /// Verifies HMAC signature with custom data builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `signature` - The signature to verify (hex-encoded)
+    /// * `data_builder` - A closure that adds data to the HMAC instance
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the signature is valid
+    /// * `Err(NonceError::InvalidSignature)` - If the signature is invalid
+    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
+    pub(crate) fn verify_signature<F>(
+        &self,
+        signature: &str,
+        data_builder: F,
+    ) -> Result<(), NonceError>
+    where
+        F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
+    {
+        let expected_signature = self.generate_signature(data_builder)?;
+        if expected_signature != signature {
+            return Err(NonceError::InvalidSignature);
+        }
+        Ok(())
+    }
+
+    /// Generates HMAC signature with custom data builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `data_builder` - A closure that adds data to the HMAC instance
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The hex-encoded HMAC signature
+    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
+    fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
+    where
+        F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
+    {
+        let mut mac = HmacSha256::new_from_slice(&self.secret)
+            .map_err(|e| NonceError::CryptoError(e.to_string()))?;
+
+        data_builder(&mut mac);
+
+        let result = mac.finalize();
+        let signature = hex::encode(result.into_bytes());
+        Ok(signature)
+    }
+
+    /// Verifies that a nonce is valid and hasn't been used, then marks it as consumed.
+    ///
+    /// This method implements the core replay attack prevention logic:
+    /// 1. Checks if the nonce already exists in the database
+    /// 2. If it exists, determines if it's expired or duplicate
+    /// 3. If it doesn't exist, stores it to prevent future reuse
+    /// 4. Triggers background cleanup of expired nonces
+    ///
+    /// # Arguments
+    ///
+    /// * `nonce` - The nonce string to verify and consume
+    /// * `context` - Optional context for nonce scoping
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the nonce is valid and has been consumed
+    /// * `Err(NonceError)` - If the nonce is invalid, expired, or already used
+    async fn verify_and_consume_nonce(
+        &self,
+        nonce: &str,
+        context: Option<&str>,
+    ) -> Result<(), NonceError> {
+        // Check if nonce already exists (has been used)
+        let existing_records: Vec<NonceRecord> = if let Some(ctx) = context {
+            select!(
+                Vec<NonceRecord>
+                "WHERE nonce = ? AND context = ?",
+                nonce, ctx
+            )?
+        } else {
+            select!(
+                Vec<NonceRecord>
+                "WHERE nonce = ? AND context IS NULL",
+                nonce
+            )?
+        };
+
+        if !existing_records.is_empty() {
+            // Check if it's expired
+            if existing_records[0].is_expired(self.default_ttl) {
+                return Err(NonceError::ExpiredNonce);
+            }
+            return Err(NonceError::DuplicateNonce);
+        }
+
+        // Store the nonce to mark it as used
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let record = NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
+        record.insert()?;
+
+        // Clean up expired nonces in the background
+        let ttl = self.default_ttl;
+        tokio::spawn(async move {
+            if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
+                eprintln!("Failed to clean up expired nonces: {e}");
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Cleans up expired nonce records from the database.
+    ///
+    /// This method removes all nonce records that are older than the specified TTL.
+    /// It's called automatically in the background after each nonce verification,
+    /// but can also be called manually for maintenance purposes.
+    ///
+    /// # Arguments
+    ///
+    /// * `ttl` - The time-to-live duration. Records older than this will be deleted.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If cleanup completed successfully
+    /// * `Err(NonceError::DatabaseError)` - If there was a database error during cleanup
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceServer;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # NonceServer::init().await?;
+    /// // Manual cleanup of nonces older than 1 hour
+    /// NonceServer::cleanup_expired_nonces(Duration::from_secs(3600)).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<(), NonceError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let cutoff_time = now - ttl.as_secs() as i64;
+
+        execute!("DELETE FROM noncerecord WHERE created_at <= ?", cutoff_time)?;
+
+        Ok(())
+    }
+
     /// Returns the default TTL (time-to-live) duration for nonce records.
     ///
     /// This is the duration after which nonces are considered expired
@@ -421,7 +431,7 @@ impl NonceServer {
     /// # Returns
     ///
     /// The default TTL duration configured for this server instance.
-    pub fn default_ttl(&self) -> Duration {
+    pub fn ttl(&self) -> Duration {
         self.default_ttl
     }
 

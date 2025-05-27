@@ -15,15 +15,22 @@ use thiserror::Error;
 ///
 /// ```rust
 /// use nonce_auth::{NonceServer, NonceError, NonceClient};
+/// use hmac::Mac;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// # NonceServer::init().await?;
 /// let server = NonceServer::new(b"secret", None, None);
 /// let client = NonceClient::new(b"secret");
-/// let request = client.create_signed_request()?;
+/// let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+///     mac.update(timestamp.as_bytes());
+///     mac.update(nonce.as_bytes());
+/// })?;
 ///
 /// // Handle different error types
-/// match server.verify_signed_request(&request, None).await {
+/// match server.verify_auth_data(&auth_data, None, |mac| {
+///     mac.update(auth_data.timestamp.to_string().as_bytes());
+///     mac.update(auth_data.nonce.as_bytes());
+/// }).await {
 ///     Ok(()) => println!("Request verified"),
 ///     Err(NonceError::DuplicateNonce) => println!("Nonce already used"),
 ///     Err(NonceError::InvalidSignature) => println!("Invalid signature"),

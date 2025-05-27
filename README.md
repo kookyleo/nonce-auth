@@ -60,6 +60,7 @@ nonce-auth = "0.1.0"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+warp = "0.3"
 ```
 
 ### Complete Client-Server Example

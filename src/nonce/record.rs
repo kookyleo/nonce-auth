@@ -77,7 +77,7 @@ impl NonceRecord {
     /// # Note
     ///
     /// This is an internal method used by `NonceServer` and is not exposed in the public API.
-    pub fn new(nonce: String, created_at: i64, context: Option<String>) -> Self {
+    pub(crate) fn create(nonce: String, created_at: i64, context: Option<String>) -> Self {
         Self {
             rowid: None,
             nonce,
@@ -104,7 +104,7 @@ impl NonceRecord {
     /// # Note
     ///
     /// This is an internal method used by `NonceServer` and is not exposed in the public API.
-    pub fn is_expired(&self, ttl: Duration) -> bool {
+    pub(crate) fn is_expired(&self, ttl: Duration) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -123,7 +123,7 @@ mod tests {
         let created_at = 1234567890;
         let context = Some("test-context".to_string());
 
-        let record = NonceRecord::new(nonce.clone(), created_at, context.clone());
+        let record = NonceRecord::create(nonce.clone(), created_at, context.clone());
 
         assert_eq!(record.nonce, nonce);
         assert_eq!(record.created_at, created_at);
@@ -136,7 +136,7 @@ mod tests {
         let nonce = "test-nonce-456".to_string();
         let created_at = 1234567890;
 
-        let record = NonceRecord::new(nonce.clone(), created_at, None);
+        let record = NonceRecord::create(nonce.clone(), created_at, None);
 
         assert_eq!(record.nonce, nonce);
         assert_eq!(record.created_at, created_at);
@@ -150,7 +150,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
 
-        let record = NonceRecord::new(
+        let record = NonceRecord::create(
             "test-nonce".to_string(),
             now - 100, // Created 100 seconds ago
             None,
@@ -167,7 +167,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
 
-        let record = NonceRecord::new(
+        let record = NonceRecord::create(
             "test-nonce".to_string(),
             now - 400, // Created 400 seconds ago
             None,
@@ -184,7 +184,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
 
-        let record = NonceRecord::new(
+        let record = NonceRecord::create(
             "test-nonce".to_string(),
             now - 301, // Created 301 seconds ago (1 second past TTL)
             None,
@@ -202,7 +202,7 @@ mod tests {
             .unwrap()
             .as_secs() as i64;
 
-        let record = NonceRecord::new(
+        let record = NonceRecord::create(
             "test-nonce".to_string(),
             now + 100, // Created in the future (shouldn't happen in practice)
             None,
