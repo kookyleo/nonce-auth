@@ -62,6 +62,16 @@ TAG_NAME="v$NEW_VERSION"
 
 print_info "Preparing to release version: $NEW_VERSION"
 print_info "Git tag: $TAG_NAME"
+
+# Check if tag already exists
+if git tag -l | grep -q "^$TAG_NAME$"; then
+    print_warning "Tag $TAG_NAME already exists locally"
+fi
+
+if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
+    print_warning "Tag $TAG_NAME already exists on remote"
+fi
+
 echo
 
 # Confirm release
@@ -81,21 +91,29 @@ git pull origin main
 
 # 2. Update version in Cargo.toml
 print_info "2. Updating Cargo.toml version..."
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS
-    sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-else
-    # Linux
-    sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-fi
 
-# Verify version update
-UPDATED_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-if [ "$UPDATED_VERSION" != "$NEW_VERSION" ]; then
-    print_error "Version update failed"
-    exit 1
+# Get current version
+CURRENT_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+
+if [ "$CURRENT_VERSION" = "$NEW_VERSION" ]; then
+    print_warning "Version is already $NEW_VERSION in Cargo.toml"
+else
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+    else
+        # Linux
+        sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+    fi
+    
+    # Verify version update
+    UPDATED_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+    if [ "$UPDATED_VERSION" != "$NEW_VERSION" ]; then
+        print_error "Version update failed"
+        exit 1
+    fi
+    print_success "Version updated from $CURRENT_VERSION to: $UPDATED_VERSION"
 fi
-print_success "Version updated to: $UPDATED_VERSION"
 
 # 3. Run code format check
 print_info "3. Checking code format..."
@@ -145,7 +163,12 @@ print_success "All checks passed!"
 # 9. Commit version update
 print_info "9. Committing version update..."
 git add Cargo.toml
-git commit -m "Bump version to $NEW_VERSION"
+if git diff --cached --quiet; then
+    print_warning "No changes to commit, version might already be up to date"
+else
+    git commit -m "Bump version to $NEW_VERSION"
+    print_success "Version update committed"
+fi
 
 # 10. Delete existing tag with same name (if exists)
 if git tag -l | grep -q "^$TAG_NAME$"; then
@@ -155,7 +178,7 @@ if git tag -l | grep -q "^$TAG_NAME$"; then
     # Try to delete remote tag
     if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
         print_warning "Deleting remote tag: $TAG_NAME"
-        git push origin
+        git push origin ":refs/tags/$TAG_NAME"
     fi
 fi
 
