@@ -118,10 +118,9 @@ jobs:
           git log --pretty=format:"- %s (%h)" --max-count=10 >> CHANGELOG.md
         fi
     
-        # Safely output changelog to GitHub Actions
-        echo "changelog<<EOF" >> $GITHUB_ENV
-        cat CHANGELOG.md >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # Safely set the changelog as an environment variable
+        changelog_content=$(cat CHANGELOG.md)
+        echo "changelog=${changelog_content}" >> $GITHUB_ENV
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
