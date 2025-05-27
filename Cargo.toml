@@ -33,3 +33,7 @@ hex = "0.4"
 [dev-dependencies]
 warp = "0.3"
 rand = "0.8"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

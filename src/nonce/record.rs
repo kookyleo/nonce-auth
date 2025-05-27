@@ -37,7 +37,8 @@ use turbosql::Turbosql;
 ///
 /// `NonceRecord` is an internal structure and is not exposed in the public API.
 /// It is used internally by `NonceServer` for database operations.
-#[derive(Turbosql, Default, Debug)]
+#[cfg_attr(not(docsrs), derive(Turbosql))]
+#[derive(Default, Debug)]
 pub(crate) struct NonceRecord {
     /// Primary key for the database record.
     /// This is automatically assigned by SQLite when the record is inserted.
@@ -110,6 +111,12 @@ impl NonceRecord {
             .unwrap()
             .as_secs() as i64;
         now > self.created_at + ttl.as_secs() as i64
+    }
+
+    /// Insert method for docs.rs compatibility
+    #[cfg(docsrs)]
+    pub(crate) fn insert(&self) -> Result<(), crate::NonceError> {
+        Ok(())
     }
 }
 

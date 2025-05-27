@@ -111,11 +111,12 @@ jobs:
           git log --pretty=format:"- %s (%h)" >> CHANGELOG.md
         fi
         
-        # 输出到 GitHub Actions 使用随机分隔符
-        delimiter=$(openssl rand -hex 8)
-        echo "changelog<<${delimiter}" >> $GITHUB_OUTPUT
-        cat CHANGELOG.md >> $GITHUB_OUTPUT
-        echo "${delimiter}" >> $GITHUB_OUTPUT
+        # 输出到 GitHub Actions
+        {
+          echo 'changelog<<EOF'
+          cat CHANGELOG.md
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
     
     - name: Create Release
       uses: softprops/action-gh-release@v1

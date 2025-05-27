@@ -1,5 +1,6 @@
 use hmac::Mac;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(not(docsrs))]
 use turbosql::{Turbosql, execute, select};
 
 use super::{NonceError, record::NonceRecord};
@@ -224,22 +225,25 @@ impl NonceServer {
     /// # }
     /// ```
     pub async fn init() -> Result<(), NonceError> {
-        // This will create the table if it doesn't exist
-        execute!(
-            r#"
-            CREATE TABLE IF NOT EXISTS noncerecord (
-                rowid INTEGER PRIMARY KEY,
-                nonce TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                context TEXT,
-                UNIQUE(nonce, context)
-            )
-            "#
-        )?;
+        #[cfg(not(docsrs))]
+        {
+            // This will create the table if it doesn't exist
+            execute!(
+                r#"
+                CREATE TABLE IF NOT EXISTS noncerecord (
+                    rowid INTEGER PRIMARY KEY,
+                    nonce TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    context TEXT,
+                    UNIQUE(nonce, context)
+                )
+                "#
+            )?;
 
-        // Create index for faster lookups
-        execute!("CREATE INDEX IF NOT EXISTS idx_nonce_context ON noncerecord (nonce, context)")?;
-        execute!("CREATE INDEX IF NOT EXISTS idx_created_at ON noncerecord (created_at)")?;
+            // Create index for faster lookups
+            execute!("CREATE INDEX IF NOT EXISTS idx_nonce_context ON noncerecord (nonce, context)")?;
+            execute!("CREATE INDEX IF NOT EXISTS idx_created_at ON noncerecord (created_at)")?;
+        }
 
         Ok(())
     }
@@ -340,45 +344,48 @@ impl NonceServer {
         nonce: &str,
         context: Option<&str>,
     ) -> Result<(), NonceError> {
-        // Check if nonce already exists (has been used)
-        let existing_records: Vec<NonceRecord> = if let Some(ctx) = context {
-            select!(
-                Vec<NonceRecord>
-                "WHERE nonce = ? AND context = ?",
-                nonce, ctx
-            )?
-        } else {
-            select!(
-                Vec<NonceRecord>
-                "WHERE nonce = ? AND context IS NULL",
-                nonce
-            )?
-        };
+        #[cfg(not(docsrs))]
+        {
+            // Check if nonce already exists (has been used)
+            let existing_records: Vec<NonceRecord> = if let Some(ctx) = context {
+                select!(
+                    Vec<NonceRecord>
+                    "WHERE nonce = ? AND context = ?",
+                    nonce, ctx
+                )?
+            } else {
+                select!(
+                    Vec<NonceRecord>
+                    "WHERE nonce = ? AND context IS NULL",
+                    nonce
+                )?
+            };
 
-        if !existing_records.is_empty() {
-            // Check if it's expired
-            if existing_records[0].is_expired(self.default_ttl) {
-                return Err(NonceError::ExpiredNonce);
+            if !existing_records.is_empty() {
+                // Check if it's expired
+                if existing_records[0].is_expired(self.default_ttl) {
+                    return Err(NonceError::ExpiredNonce);
+                }
+                return Err(NonceError::DuplicateNonce);
             }
-            return Err(NonceError::DuplicateNonce);
+
+            // Store the nonce to mark it as used
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
+            let record = NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
+            record.insert()?;
+
+            // Clean up expired nonces in the background
+            let ttl = self.default_ttl;
+            tokio::spawn(async move {
+                if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
+                    eprintln!("Failed to clean up expired nonces: {e}");
+                }
+            });
         }
-
-        // Store the nonce to mark it as used
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let record = NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
-        record.insert()?;
-
-        // Clean up expired nonces in the background
-        let ttl = self.default_ttl;
-        tokio::spawn(async move {
-            if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
-                eprintln!("Failed to clean up expired nonces: {e}");
-            }
-        });
 
         Ok(())
     }
@@ -412,14 +419,17 @@ impl NonceServer {
     /// # }
     /// ```
     pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<(), NonceError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        #[cfg(not(docsrs))]
+        {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
 
-        let cutoff_time = now - ttl.as_secs() as i64;
+            let cutoff_time = now - ttl.as_secs() as i64;
 
-        execute!("DELETE FROM noncerecord WHERE created_at <= ?", cutoff_time)?;
+            execute!("DELETE FROM noncerecord WHERE created_at <= ?", cutoff_time)?;
+        }
 
         Ok(())
     }
