@@ -99,16 +99,25 @@ jobs:
     - name: Generate changelog
       id: changelog
       run: |
+        # 获取当前 tag
+        CURRENT_TAG=${GITHUB_REF#refs/tags/}
+        echo "Current tag: $CURRENT_TAG"
+        
+        # 获取所有 tags 并排序
+        ALL_TAGS=$(git tag -l | sort -V)
+        echo "All tags: $ALL_TAGS"
+        
         # 获取上一个 tag
-        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        PREV_TAG=$(echo "$ALL_TAGS" | grep -B1 "^$CURRENT_TAG$" | head -1)
+        echo "Previous tag: $PREV_TAG"
         
         # 生成变更日志
-        if [ -n "$PREV_TAG" ]; then
+        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURRENT_TAG" ]; then
           echo "## Changes since $PREV_TAG" > CHANGELOG.md
           git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> CHANGELOG.md
         else
           echo "## Initial Release" > CHANGELOG.md
-          git log --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          git log --pretty=format:"- %s (%h)" --max-count=10 >> CHANGELOG.md
         fi
         
         # 输出到 GitHub Actions
