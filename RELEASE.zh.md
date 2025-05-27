@@ -32,14 +32,14 @@ cargo fmt --check
 
 ```toml
 [package]
-version = "0.2.0"  # 更新为新版本
+version = "0.1.3"  # 更新为新版本
 ```
 
 ### 3. 提交变更
 
 ```bash
 git add Cargo.toml
-git commit -m "Bump version to 0.2.0"
+git commit -m "Bump version to 0.1.3"
 git push origin main
 ```
 
@@ -47,10 +47,10 @@ git push origin main
 
 ```bash
 # 创建 tag（必须以 'v' 开头）
-git tag v0.2.0
+git tag v0.1.3
 
 # 推送 tag 到 GitHub
-git push origin v0.2.0
+git push origin v0.1.3
 ```
 
 ### 5. 自动发布流程
@@ -87,13 +87,13 @@ git push origin v0.2.0
 
 1. **删除 tag**：
    ```bash
-   git tag -d v0.2.0
-   git push origin :refs/tags/v0.2.0
+   git tag -d v0.1.3
+   git push origin :refs/tags/v0.1.3
    ```
 
 2. **从 crates.io 撤回**（仅限 72 小时内）：
    ```bash
-   cargo yank --vers 0.2.0
+   cargo yank --vers 0.1.3
    ```
 
 ## 发布后验证
@@ -101,3 +101,19 @@ git push origin v0.2.0
 1. 访问 [crates.io/crates/nonce-auth](https://crates.io/crates/nonce-auth) 确认新版本
 2. 检查 [docs.rs/nonce-auth](https://docs.rs/nonce-auth) 文档是否更新
 3. 验证 GitHub Release 页面
+
+## 发布历史
+
+### v0.1.2 (当前版本)
+- 修复了 GitHub Actions 输出格式问题
+- 解决了 docs.rs 构建兼容性问题
+- 添加了条件编译支持
+- 修复了代码格式和 Clippy 警告
+
+### v0.1.1
+- 初始功能实现
+- 客户端服务端分离设计
+- 灵活的签名算法支持
+
+### v0.1.0
+- 项目初始发布
