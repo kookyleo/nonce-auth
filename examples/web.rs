@@ -20,17 +20,13 @@ struct ApiResponse {
     data: Option<String>,
 }
 
-// Function to generate a cryptographically secure PSK
+// Generate a cryptographically secure PSK using ChaCha20 CSPRNG
 fn generate_psk() -> String {
     use rand::RngCore;
-
-    // Generate 32 bytes (256 bits) of cryptographically secure random data
-    // This is the recommended key size for HMAC-SHA256
-    let mut psk_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut psk_bytes);
-
-    // Convert to hexadecimal string
-    hex::encode(psk_bytes)
+    let mut rng = rand::thread_rng();
+    let mut key = [0u8; 32]; // 256-bit key
+    rng.fill_bytes(&mut key);
+    hex::encode(key)
 }
 
 // Function to generate HTML with embedded PSK and session ID
@@ -114,7 +110,7 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     
     <div class="info">
         <h3>Current PSK (Pre-Shared Key):</h3>
-        <div id="psk" style="font-family: monospace; word-break: break-all; background: #f5f5f5; padding: 10px; border-radius: 4px;">{}</div>
+        <div id="psk" style="font-family: monospace; word-break: break-all; background: #f5f5f5; padding: 10px; border-radius: 4px;">{psk}</div>
     </div>
     
     <div class="info">
@@ -145,8 +141,8 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
 
     <script>
         // PSK and session ID are embedded directly from server
-        const currentPsk = '{}';
-        const sessionId = '{}';
+        const currentPsk = '{psk}';
+        const sessionId = '{session_id}';
         
         class NonceClient {{
             constructor(psk) {{
@@ -274,8 +270,7 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     </script>
 </body>
 </html>
-"#,
-        psk, psk, session_id
+"#
     )
 }
 
@@ -330,7 +325,7 @@ async fn handle_index_request(psk_store: PskStore) -> Result<impl warp::Reply, w
     {
         let mut store = psk_store.lock().unwrap();
         store.insert(session_id.clone(), psk.clone());
-        println!("Stored PSK for session ID: {}", session_id);
+        println!("Stored PSK for session ID: {session_id}");
 
         // Clean up old PSKs (disabled for debugging)
         // if store.len() > 5 {
@@ -394,7 +389,7 @@ async fn handle_protected_request(
         Err(e) => {
             let response = ApiResponse {
                 success: false,
-                message: format!("Authentication failed: {:?}", e),
+                message: format!("Authentication failed: {e:?}"),
                 data: None,
             };
             Ok(warp::reply::json(&response))
