@@ -241,7 +241,9 @@ impl NonceServer {
             )?;
 
             // Create index for faster lookups
-            execute!("CREATE INDEX IF NOT EXISTS idx_nonce_context ON noncerecord (nonce, context)")?;
+            execute!(
+                "CREATE INDEX IF NOT EXISTS idx_nonce_context ON noncerecord (nonce, context)"
+            )?;
             execute!("CREATE INDEX IF NOT EXISTS idx_created_at ON noncerecord (created_at)")?;
         }
 
@@ -375,7 +377,8 @@ impl NonceServer {
                 .unwrap()
                 .as_secs() as i64;
 
-            let record = NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
+            let record =
+                NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
             record.insert()?;
 
             // Clean up expired nonces in the background
