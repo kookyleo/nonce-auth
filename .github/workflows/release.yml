@@ -118,9 +118,12 @@ jobs:
           git log --pretty=format:"- %s (%h)" --max-count=10 >> CHANGELOG.md
         fi
     
-        # Safely set the changelog as an environment variable
-        changelog_content=$(cat CHANGELOG.md)
-        echo "changelog=${changelog_content}" >> $GITHUB_ENV
+        # Use proper multiline output format for GitHub Actions
+        {
+          echo 'changelog<<EOF'
+          cat CHANGELOG.md
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
