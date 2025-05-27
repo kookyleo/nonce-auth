@@ -156,7 +156,7 @@ if git tag -l | grep -q "^$TAG_NAME$"; then
     # Try to delete remote tag
     if git ls-remote --tags origin | grep -q "refs/tags/$TAG_NAME"; then
         print_warning "Deleting remote tag: $TAG_NAME"
-        git push origin ":refs/tags/$TAG_NAME"
+        git push origin
     fi
 fi
 
