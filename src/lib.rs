@@ -198,8 +198,8 @@ pub struct AuthData {
 #[cfg(test)]
 mod tests {
     use crate::nonce::{NonceClient, NonceError, NonceServer};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use hmac::Mac;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     const TEST_SECRET: &[u8] = b"test_secret_key_123";
 
@@ -219,38 +219,51 @@ mod tests {
         );
 
         // Client creates auth data with custom signature
-        let request = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let request = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         // Server verifies the request with matching signature algorithm
-        assert!(server.verify_auth_data(&request, None, |mac| {
-            mac.update(request.timestamp.to_string().as_bytes());
-            mac.update(request.nonce.as_bytes());
-        }).await.is_ok());
+        assert!(
+            server
+                .verify_auth_data(&request, None, |mac| {
+                    mac.update(request.timestamp.to_string().as_bytes());
+                    mac.update(request.nonce.as_bytes());
+                })
+                .await
+                .is_ok()
+        );
 
         // Test duplicate request detection
         assert!(matches!(
-            server.verify_auth_data(&request, None, |mac| {
-                mac.update(request.timestamp.to_string().as_bytes());
-                mac.update(request.nonce.as_bytes());
-            }).await,
+            server
+                .verify_auth_data(&request, None, |mac| {
+                    mac.update(request.timestamp.to_string().as_bytes());
+                    mac.update(request.nonce.as_bytes());
+                })
+                .await,
             Err(NonceError::DuplicateNonce)
         ));
 
         // Test invalid signature
-        let mut bad_request = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let mut bad_request = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
         bad_request.signature = "invalid_signature".to_string();
 
         assert!(matches!(
-            server.verify_auth_data(&bad_request, None, |mac| {
-                mac.update(bad_request.timestamp.to_string().as_bytes());
-                mac.update(bad_request.nonce.as_bytes());
-            }).await,
+            server
+                .verify_auth_data(&bad_request, None, |mac| {
+                    mac.update(bad_request.timestamp.to_string().as_bytes());
+                    mac.update(bad_request.nonce.as_bytes());
+                })
+                .await,
             Err(NonceError::InvalidSignature)
         ));
     }
@@ -266,10 +279,12 @@ mod tests {
         let server = NonceServer::new(TEST_SECRET, None, None);
 
         // Create one auth data to test context isolation
-        let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let auth_data = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         // Same nonce can be used in different contexts
         assert!(
@@ -313,18 +328,25 @@ mod tests {
         ));
 
         // Test with no context (NULL context)
-        assert!(server.verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
-        }).await.is_ok());
+        assert!(
+            server
+                .verify_auth_data(&auth_data, None, |mac| {
+                    mac.update(auth_data.timestamp.to_string().as_bytes());
+                    mac.update(auth_data.nonce.as_bytes());
+                })
+                .await
+                .is_ok()
+        );
 
         // Cannot reuse with no context
         let auth_data_copy2 = auth_data.clone();
         assert!(matches!(
-            server.verify_auth_data(&auth_data_copy2, None, |mac| {
-                mac.update(auth_data_copy2.timestamp.to_string().as_bytes());
-                mac.update(auth_data_copy2.nonce.as_bytes());
-            }).await,
+            server
+                .verify_auth_data(&auth_data_copy2, None, |mac| {
+                    mac.update(auth_data_copy2.timestamp.to_string().as_bytes());
+                    mac.update(auth_data_copy2.nonce.as_bytes());
+                })
+                .await,
             Err(NonceError::DuplicateNonce)
         ));
     }
@@ -351,12 +373,14 @@ mod tests {
             .saturating_sub(3600); // 1 hour ago
 
         let nonce = uuid::Uuid::new_v4().to_string();
-        
+
         // Create signature with old timestamp
-        let signature = client.generate_signature(|mac| {
-            mac.update(old_timestamp.to_string().as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let signature = client
+            .generate_signature(|mac| {
+                mac.update(old_timestamp.to_string().as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         let old_auth_data = crate::AuthData {
             timestamp: old_timestamp,
@@ -365,10 +389,12 @@ mod tests {
         };
 
         assert!(matches!(
-            server.verify_auth_data(&old_auth_data, None, |mac| {
-                mac.update(old_auth_data.timestamp.to_string().as_bytes());
-                mac.update(old_auth_data.nonce.as_bytes());
-            }).await,
+            server
+                .verify_auth_data(&old_auth_data, None, |mac| {
+                    mac.update(old_auth_data.timestamp.to_string().as_bytes());
+                    mac.update(old_auth_data.nonce.as_bytes());
+                })
+                .await,
             Err(NonceError::TimestampOutOfWindow)
         ));
     }
@@ -407,24 +433,33 @@ mod tests {
             Some(Duration::from_secs(300)),
         );
 
-        let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let auth_data = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         // First verification should succeed
-        assert!(server.verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
-        }).await.is_ok());
+        assert!(
+            server
+                .verify_auth_data(&auth_data, None, |mac| {
+                    mac.update(auth_data.timestamp.to_string().as_bytes());
+                    mac.update(auth_data.nonce.as_bytes());
+                })
+                .await
+                .is_ok()
+        );
 
         // Second verification with same nonce should fail (already consumed)
         let duplicate_auth_data = auth_data.clone();
         assert!(matches!(
-            server.verify_auth_data(&duplicate_auth_data, None, |mac| {
-                mac.update(duplicate_auth_data.timestamp.to_string().as_bytes());
-                mac.update(duplicate_auth_data.nonce.as_bytes());
-            }).await,
+            server
+                .verify_auth_data(&duplicate_auth_data, None, |mac| {
+                    mac.update(duplicate_auth_data.timestamp.to_string().as_bytes());
+                    mac.update(duplicate_auth_data.nonce.as_bytes());
+                })
+                .await,
             Err(NonceError::DuplicateNonce)
         ));
     }
@@ -449,28 +484,34 @@ mod tests {
         let timestamp = "1234567890";
         let nonce = "test-nonce";
 
-        let signature = client.generate_signature(|mac| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let signature = client
+            .generate_signature(|mac| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
         assert!(!signature.is_empty());
 
         // Test with different secret should produce different signature
         let client2 = NonceClient::new(b"different_secret");
-        let signature2 = client2.generate_signature(|mac| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let signature2 = client2
+            .generate_signature(|mac| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
         assert_ne!(signature, signature2);
     }
 
     #[tokio::test]
     async fn test_serialization() {
         let client = NonceClient::new(TEST_SECRET);
-        let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let auth_data = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         // Test JSON serialization
         let json = serde_json::to_string(&auth_data).unwrap();

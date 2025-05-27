@@ -1,10 +1,10 @@
+use hmac::Mac;
 use nonce_auth::NonceServer;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use warp::Filter;
-use std::sync::Arc;
-use std::collections::HashMap;
-use hmac::Mac;
 
 #[derive(Deserialize)]
 struct AuthenticatedRequest {
@@ -23,19 +23,20 @@ struct ApiResponse {
 // Function to generate a cryptographically secure PSK
 fn generate_psk() -> String {
     use rand::RngCore;
-    
+
     // Generate 32 bytes (256 bits) of cryptographically secure random data
     // This is the recommended key size for HMAC-SHA256
     let mut psk_bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut psk_bytes);
-    
+
     // Convert to hexadecimal string
     hex::encode(psk_bytes)
 }
 
 // Function to generate HTML with embedded PSK and session ID
 fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
-    format!(r#"
+    format!(
+        r#"
 <!DOCTYPE html>
 <html>
 <head>
@@ -273,7 +274,9 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     </script>
 </body>
 </html>
-"#, psk, psk, session_id)
+"#,
+        psk, psk, session_id
+    )
 }
 
 // Store PSKs for each session
@@ -282,7 +285,9 @@ type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
 #[tokio::main]
 async fn main() {
     // Initialize the nonce server database
-    NonceServer::init().await.expect("Failed to initialize database");
+    NonceServer::init()
+        .await
+        .expect("Failed to initialize database");
 
     // Create PSK store
     let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -302,42 +307,38 @@ async fn main() {
         .and_then(handle_protected_request);
 
     // Combine routes
-    let routes = index_route
-        .or(protected_route)
-        .with(
-            warp::cors()
-                .allow_any_origin()
-                .allow_headers(vec!["content-type"])
-                .allow_methods(vec!["GET", "POST"]),
-        );
+    let routes = index_route.or(protected_route).with(
+        warp::cors()
+            .allow_any_origin()
+            .allow_headers(vec!["content-type"])
+            .allow_methods(vec!["GET", "POST"]),
+    );
 
     println!("Server running on http://localhost:3000");
     println!("Open this URL in your browser to test the authentication");
     println!("Each page refresh will generate a new PSK");
-    
-    warp::serve(routes)
-        .run(([127, 0, 0, 1], 3000))
-        .await;
+
+    warp::serve(routes).run(([127, 0, 0, 1], 3000)).await;
 }
 
 async fn handle_index_request(psk_store: PskStore) -> Result<impl warp::Reply, warp::Rejection> {
     // Generate a new PSK and session ID for this page load
     let psk = generate_psk();
     let session_id = generate_psk(); // Use same function for session ID
-    
+
     // Store the PSK using session ID as the key
     {
         let mut store = psk_store.lock().unwrap();
         store.insert(session_id.clone(), psk.clone());
         println!("Stored PSK for session ID: {}", session_id);
-        
+
         // Clean up old PSKs (disabled for debugging)
         // if store.len() > 5 {
         //     store.clear();
         //     store.insert(session_id.clone(), psk.clone());
         // }
     }
-    
+
     // Generate HTML with embedded PSK and session ID
     let html = generate_html_with_psk_and_session(&psk, &session_id);
     Ok(warp::reply::html(html))
@@ -353,7 +354,7 @@ async fn handle_protected_request(
         println!("Looking for session ID: {}", req.session_id);
         store.get(&req.session_id).cloned()
     };
-    
+
     let psk = match psk {
         Some(psk) => psk,
         None => {
@@ -365,20 +366,23 @@ async fn handle_protected_request(
             return Ok(warp::reply::json(&response));
         }
     };
-    
+
     // Create server with PSK
     let server = NonceServer::new(
         psk.as_bytes(),
         Some(Duration::from_secs(60)), // 1 minute TTL
-        Some(Duration::from_secs(15)),  // 15 seconds time window
+        Some(Duration::from_secs(15)), // 15 seconds time window
     );
 
     // Verify the request with custom signature including payload
-    match server.verify_auth_data(&req.auth, None, |mac| {
-        mac.update(req.auth.timestamp.to_string().as_bytes());
-        mac.update(req.auth.nonce.as_bytes());
-        mac.update(req.payload.as_bytes());
-    }).await {
+    match server
+        .verify_auth_data(&req.auth, None, |mac| {
+            mac.update(req.auth.timestamp.to_string().as_bytes());
+            mac.update(req.auth.nonce.as_bytes());
+            mac.update(req.payload.as_bytes());
+        })
+        .await
+    {
         Ok(()) => {
             let response = ApiResponse {
                 success: true,

@@ -3,8 +3,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use turbosql::{Turbosql, execute, select};
 
 use super::{NonceError, record::NonceRecord};
-use crate::HmacSha256;
 use crate::AuthData;
+use crate::HmacSha256;
 
 /// Server-side nonce manager for verifying signed requests and managing nonce storage.
 ///
@@ -142,7 +142,7 @@ impl NonceServer {
     /// // Custom signature including payload and method
     /// let payload = "request body";
     /// let method = "POST";
-    /// 
+    ///
     /// server.verify_auth_data(&auth_data, None, |mac| {
     ///     mac.update(auth_data.timestamp.to_string().as_bytes());
     ///     mac.update(auth_data.nonce.as_bytes());
@@ -168,7 +168,8 @@ impl NonceServer {
         self.verify_signature(&auth_data.signature, signature_builder)?;
 
         // 3. Verify nonce is valid and not used
-        self.verify_and_consume_nonce(&auth_data.nonce, context).await?;
+        self.verify_and_consume_nonce(&auth_data.nonce, context)
+            .await?;
 
         Ok(())
     }

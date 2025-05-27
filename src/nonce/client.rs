@@ -2,8 +2,8 @@ use hmac::Mac;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::NonceError;
-use crate::HmacSha256;
 use crate::AuthData;
+use crate::HmacSha256;
 
 /// Client-side nonce manager for generating signed requests.
 ///
@@ -137,7 +137,7 @@ impl NonceClient {
             .as_secs();
 
         let nonce = uuid::Uuid::new_v4().to_string();
-        
+
         let signature = self.generate_signature(|mac| {
             signature_builder(mac, &timestamp.to_string(), &nonce);
         })?;
@@ -212,11 +212,13 @@ mod tests {
         let client = NonceClient::new(TEST_SECRET);
         let payload = "test payload";
 
-        let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-            mac.update(payload.as_bytes());
-        }).unwrap();
+        let auth_data = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+                mac.update(payload.as_bytes());
+            })
+            .unwrap();
 
         assert!(auth_data.timestamp > 0);
         assert!(!auth_data.nonce.is_empty());
@@ -224,11 +226,13 @@ mod tests {
         assert_eq!(auth_data.signature.len(), 64);
 
         // Verify the signature includes the payload
-        let expected_signature = client.generate_signature(|mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
-            mac.update(payload.as_bytes());
-        }).unwrap();
+        let expected_signature = client
+            .generate_signature(|mac| {
+                mac.update(auth_data.timestamp.to_string().as_bytes());
+                mac.update(auth_data.nonce.as_bytes());
+                mac.update(payload.as_bytes());
+            })
+            .unwrap();
         assert_eq!(auth_data.signature, expected_signature);
     }
 
@@ -236,15 +240,19 @@ mod tests {
     fn test_multiple_auth_data_different_nonces() {
         let client = NonceClient::new(TEST_SECRET);
 
-        let auth_data1 = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
-        
-        let auth_data2 = client.create_auth_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-        }).unwrap();
+        let auth_data1 = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
+
+        let auth_data2 = client
+            .create_auth_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+            })
+            .unwrap();
 
         assert_ne!(auth_data1.nonce, auth_data2.nonce);
         assert_ne!(auth_data1.signature, auth_data2.signature);
@@ -254,15 +262,19 @@ mod tests {
     fn test_sign_with_builder() {
         let client = NonceClient::new(TEST_SECRET);
 
-        let signature1 = client.generate_signature(|mac| {
-            mac.update(b"data1");
-            mac.update(b"data2");
-        }).unwrap();
+        let signature1 = client
+            .generate_signature(|mac| {
+                mac.update(b"data1");
+                mac.update(b"data2");
+            })
+            .unwrap();
 
-        let signature2 = client.generate_signature(|mac| {
-            mac.update(b"data1");
-            mac.update(b"data3");
-        }).unwrap();
+        let signature2 = client
+            .generate_signature(|mac| {
+                mac.update(b"data1");
+                mac.update(b"data3");
+            })
+            .unwrap();
 
         assert_eq!(signature1.len(), 64);
         assert_eq!(signature2.len(), 64);
@@ -274,13 +286,17 @@ mod tests {
         let client1 = NonceClient::new(b"secret1");
         let client2 = NonceClient::new(b"secret2");
 
-        let sig1 = client1.generate_signature(|mac| {
-            mac.update(b"data");
-        }).unwrap();
-        
-        let sig2 = client2.generate_signature(|mac| {
-            mac.update(b"data");
-        }).unwrap();
+        let sig1 = client1
+            .generate_signature(|mac| {
+                mac.update(b"data");
+            })
+            .unwrap();
+
+        let sig2 = client2
+            .generate_signature(|mac| {
+                mac.update(b"data");
+            })
+            .unwrap();
 
         assert_ne!(sig1, sig2);
     }
