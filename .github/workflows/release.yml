@@ -97,7 +97,9 @@ jobs:
     
     - name: Get tag
       id: tag
-      run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
  
     - name: Build Changelog
       id: changelog
@@ -152,12 +154,12 @@ jobs:
           
           ```toml
           [dependencies]
-          nonce-auth = "${{ steps.tag.outputs.tag }}"
+          nonce-auth = "${{ steps.tag.outputs.version }}"
           ```
           
           ## 📖 Documentation
           
-          - [API Documentation](https://docs.rs/nonce-auth/${{ steps.tag.outputs.tag }})
+          - [API Documentation](https://docs.rs/nonce-auth/${{ steps.tag.outputs.version }})
           - [Crates.io](https://crates.io/crates/nonce-auth)
           
           ## 🔗 Links

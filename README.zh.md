@@ -54,7 +54,7 @@
 
 ```toml
 [dependencies]
-nonce-auth = "0.1.2"
+nonce-auth = "0.1.9"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

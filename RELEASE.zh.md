@@ -32,14 +32,14 @@ cargo fmt --check
 
 ```toml
 [package]
-version = "0.1.3"  # 更新为新版本
+version = "0.1.10"  # 更新为新版本
 ```
 
 ### 3. 提交变更
 
 ```bash
 git add Cargo.toml
-git commit -m "Bump version to 0.1.3"
+git commit -m "Bump version to 0.1.10"
 git push origin main
 ```
 
@@ -47,10 +47,10 @@ git push origin main
 
 ```bash
 # 创建 tag（必须以 'v' 开头）
-git tag v0.1.3
+git tag v0.1.10
 
 # 推送 tag 到 GitHub
-git push origin v0.1.3
+git push origin v0.1.10
 ```
 
 ### 5. 自动发布流程
@@ -60,7 +60,7 @@ git push origin v0.1.3
 1. **运行测试**：确保代码质量
 2. **验证版本**：检查 tag 版本与 Cargo.toml 版本是否一致
 3. **发布到 crates.io**：自动发布新版本
-4. **创建 GitHub Release**：生成 release notes
+4. **创建 GitHub Release**：使用专业的 changelog 生成器自动生成 release notes
 
 ## 版本号规范
 
@@ -87,13 +87,13 @@ git push origin v0.1.3
 
 1. **删除 tag**：
    ```bash
-   git tag -d v0.1.3
-   git push origin :refs/tags/v0.1.3
+   git tag -d v0.1.10
+   git push origin :refs/tags/v0.1.10
    ```
 
 2. **从 crates.io 撤回**（仅限 72 小时内）：
    ```bash
-   cargo yank --vers 0.1.3
+   cargo yank --vers 0.1.10
    ```
 
 ## 发布后验证
@@ -104,11 +104,20 @@ git push origin v0.1.3
 
 ## 发布历史
 
-### v0.1.2 (当前版本)
+### v0.1.9 (当前版本)
+- 升级到专业的 Release Changelog Builder
+- 修复了 GitHub Actions 中的版本号格式问题
+- 优化了 Release Notes 的格式和内容
+- 添加了智能的 changelog 分类系统
+
+### v0.1.8
 - 修复了 GitHub Actions 输出格式问题
 - 解决了 docs.rs 构建兼容性问题
 - 添加了条件编译支持
+
+### v0.1.2
 - 修复了代码格式和 Clippy 警告
+- 完善了文档和示例
 
 ### v0.1.1
 - 初始功能实现
