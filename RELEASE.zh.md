@@ -23,7 +23,7 @@ git pull origin main
 # 运行完整测试
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --check
+cargo fmt --all -- --check
 ```
 
 ### 2. 更新版本号
@@ -32,14 +32,14 @@ cargo fmt --check
 
 ```toml
 [package]
-version = "0.1.10"  # 更新为新版本
+version = "0.2.0"  # 更新为新版本
 ```
 
 ### 3. 提交变更
 
 ```bash
 git add Cargo.toml
-git commit -m "Bump version to 0.1.10"
+git commit -m "Bump version to 0.2.0"
 git push origin main
 ```
 
@@ -47,10 +47,10 @@ git push origin main
 
 ```bash
 # 创建 tag（必须以 'v' 开头）
-git tag v0.1.10
+git tag v0.2.0
 
 # 推送 tag 到 GitHub
-git push origin v0.1.10
+git push origin v0.2.0
 ```
 
 ### 5. 自动发布流程
@@ -87,13 +87,13 @@ git push origin v0.1.10
 
 1. **删除 tag**：
    ```bash
-   git tag -d v0.1.10
-   git push origin :refs/tags/v0.1.10
+   git tag -d v0.2.0
+   git push origin :refs/tags/v0.2.0
    ```
 
 2. **从 crates.io 撤回**（仅限 72 小时内）：
    ```bash
-   cargo yank --vers 0.1.10
+   cargo yank --vers 0.2.0
    ```
 
 ## 发布后验证
@@ -104,7 +104,7 @@ git push origin v0.1.10
 
 ## 发布历史
 
-### v0.1.9 (当前版本)
+### v0.1.9
 - 升级到专业的 Release Changelog Builder
 - 修复了 GitHub Actions 中的版本号格式问题
 - 优化了 Release Notes 的格式和内容
