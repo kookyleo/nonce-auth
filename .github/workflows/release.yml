@@ -96,34 +96,42 @@ jobs:
       id: tag
       run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
  
-    - name: Generate changelog
+    - name: Build Changelog
       id: changelog
-      run: |
-        # Get the current and previous tags
-        CURRENT_TAG=${GITHUB_REF#refs/tags/}
-        echo "Current tag: $CURRENT_TAG"
-    
-        ALL_TAGS=$(git tag -l | sort -V)
-        echo "All tags: $ALL_TAGS"
-    
-        PREV_TAG=$(echo "$ALL_TAGS" | grep -B1 "^$CURRENT_TAG$" | head -1)
-        echo "Previous tag: $PREV_TAG"
-    
-        # Generate changelog
-        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$CURRENT_TAG" ]; then
-          echo "## Changes since $PREV_TAG" > CHANGELOG.md
-          git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> CHANGELOG.md
-        else
-          echo "## Initial Release" > CHANGELOG.md
-          git log --pretty=format:"- %s (%h)" --max-count=10 >> CHANGELOG.md
-        fi
-    
-        # Use proper multiline output format for GitHub Actions
-        {
-          echo 'changelog<<EOF'
-          cat CHANGELOG.md
-          echo 'EOF'
-        } >> $GITHUB_OUTPUT
+      uses: mikepenz/release-changelog-builder-action@v5
+      with:
+        configurationJson: |
+          {
+            "template": "#{{CHANGELOG}}\n\n## 🔧 Other Changes\n#{{UNCATEGORIZED}}",
+            "categories": [
+              {
+                "title": "## 🚀 Features",
+                "labels": ["feature", "feat", "enhancement"]
+              },
+              {
+                "title": "## 🐛 Bug Fixes", 
+                "labels": ["bug", "fix", "bugfix"]
+              },
+              {
+                "title": "## 📚 Documentation",
+                "labels": ["documentation", "docs"]
+              },
+              {
+                "title": "## 🔧 Maintenance",
+                "labels": ["maintenance", "chore", "ci", "build"]
+              },
+              {
+                "title": "## 📦 Dependencies",
+                "labels": ["dependencies", "deps"]
+              }
+            ],
+            "pr_template": "- #{{TITLE}} (#{{NUMBER}})",
+            "empty_template": "- No changes",
+            "max_pull_requests": 200,
+            "max_back_track_time_days": 365
+          }
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -135,7 +143,7 @@ jobs:
           
           ${{ steps.changelog.outputs.changelog }}
           
-          ## Installation
+          ## 📦 Installation
           
           Add this to your `Cargo.toml`:
           
@@ -144,10 +152,15 @@ jobs:
           nonce-auth = "${{ steps.tag.outputs.tag }}"
           ```
           
-          ## Documentation
+          ## 📖 Documentation
           
           - [API Documentation](https://docs.rs/nonce-auth/${{ steps.tag.outputs.tag }})
           - [Crates.io](https://crates.io/crates/nonce-auth)
+          
+          ## 🔗 Links
+          
+          - [GitHub Repository](https://github.com/kookyleo/nonce-auth)
+          - [Release Notes](https://github.com/kookyleo/nonce-auth/releases)
         draft: false
         prerelease: false
       env:
