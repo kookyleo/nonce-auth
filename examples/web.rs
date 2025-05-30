@@ -10,7 +10,7 @@ use warp::Filter;
 struct AuthenticatedRequest {
     payload: String,
     session_id: String,
-    auth: nonce_auth::AuthData,
+    auth: nonce_auth::ProtectionData,
 }
 
 #[derive(Serialize)]
@@ -371,7 +371,7 @@ async fn handle_protected_request(
 
     // Verify the request with custom signature including payload
     match server
-        .verify_auth_data(&req.auth, None, |mac| {
+        .verify_protection_data(&req.auth, None, |mac| {
             mac.update(req.auth.timestamp.to_string().as_bytes());
             mac.update(req.auth.nonce.as_bytes());
             mac.update(req.payload.as_bytes());

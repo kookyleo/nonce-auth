@@ -86,17 +86,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(psk);
 
     // 客户端生成带自定义签名的认证数据（时间戳 + nonce）
-    let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
         mac.update(timestamp.as_bytes());
         mac.update(nonce.as_bytes());
     })?;
-    println!("生成的认证数据: {auth_data:?}");
+    println!("生成的认证数据: {protection_data:?}");
 
     // 服务端使用匹配的签名算法验证认证数据
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {
@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 尝试再次使用相同的 nonce（应该失败）
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {
@@ -224,7 +224,7 @@ use warp::Filter;
 struct AuthenticatedRequest {
     payload: String,
     session_id: String,
-    auth: nonce_auth::AuthData,
+    auth: nonce_auth::ProtectionData,
 }
 
 #[derive(Serialize)]
@@ -308,7 +308,7 @@ async fn handle_protected_request(
 
     // 使用包含载荷的自定义签名验证请求
     match server
-        .verify_auth_data(&req.auth, None, |mac| {
+        .verify_protection_data(&req.auth, None, |mac| {
             mac.update(req.auth.timestamp.to_string().as_bytes());
             mac.update(req.auth.nonce.as_bytes());
             mac.update(req.payload.as_bytes());
@@ -407,7 +407,7 @@ pub fn new(secret: &[u8]) -> Self
 ##### 创建认证数据
 
 ```rust
-pub fn create_auth_data<F>(&self, signature_builder: F) -> Result<AuthData, NonceError>
+pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
 where
     F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
 ```
@@ -445,9 +445,9 @@ pub fn new(
 ##### 验证认证数据
 
 ```rust
-pub async fn verify_auth_data<F>(
+pub async fn verify_protection_data<F>(
     &self, 
-    auth_data: &AuthData, 
+    protection_data: &ProtectionData, 
     context: Option<&str>,
     signature_builder: F,
 ) -> Result<(), NonceError>
@@ -465,10 +465,10 @@ pub async fn init() -> Result<(), NonceError>
 
 创建必要的数据库表和索引。
 
-### AuthData
+### ProtectionData
 
 ```rust
-pub struct AuthData {
+pub struct ProtectionData {
     pub timestamp: u64,    // Unix 时间戳
     pub nonce: String,     // UUID 格式的一次性令牌
     pub signature: String, // HMAC-SHA256 签名

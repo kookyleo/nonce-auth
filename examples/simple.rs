@@ -19,17 +19,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(psk);
 
     // Client generates authentication data with custom signature (timestamp + nonce)
-    let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
         mac.update(timestamp.as_bytes());
         mac.update(nonce.as_bytes());
     })?;
-    println!("Generated authentication data: {auth_data:?}");
+    println!("Generated authentication data: {protection_data:?}");
 
     // Server verifies the authentication data with matching signature algorithm
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {
@@ -39,9 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try to use the same nonce again (should fail)
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {

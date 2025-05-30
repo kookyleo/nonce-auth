@@ -21,15 +21,15 @@ use thiserror::Error;
 /// # NonceServer::init().await?;
 /// let server = NonceServer::new(b"secret", None, None);
 /// let client = NonceClient::new(b"secret");
-/// let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+/// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 ///     mac.update(timestamp.as_bytes());
 ///     mac.update(nonce.as_bytes());
 /// })?;
 ///
 /// // Handle different error types
-/// match server.verify_auth_data(&auth_data, None, |mac| {
-///     mac.update(auth_data.timestamp.to_string().as_bytes());
-///     mac.update(auth_data.nonce.as_bytes());
+/// match server.verify_protection_data(&protection_data, None, |mac| {
+///     mac.update(protection_data.timestamp.to_string().as_bytes());
+///     mac.update(protection_data.nonce.as_bytes());
 /// }).await {
 ///     Ok(()) => println!("Request verified"),
 ///     Err(NonceError::DuplicateNonce) => println!("Nonce already used"),

@@ -35,15 +35,15 @@
 //! let server = NonceServer::new(secret, None, None);
 //!
 //! // Client generates authentication data with custom signature
-//! let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+//! let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 //!     mac.update(timestamp.as_bytes());
 //!     mac.update(nonce.as_bytes());
 //! })?;
 //!
 //! // Server verifies the authentication data with matching signature algorithm
-//! match server.verify_auth_data(&auth_data, None, |mac| {
-//!     mac.update(auth_data.timestamp.to_string().as_bytes());
-//!     mac.update(auth_data.nonce.as_bytes());
+//! match server.verify_protection_data(&protection_data, None, |mac| {
+//!     mac.update(protection_data.timestamp.to_string().as_bytes());
+//!     mac.update(protection_data.nonce.as_bytes());
 //! }).await {
 //!     Ok(()) => println!("Authentication verified successfully"),
 //!     Err(e) => println!("Verification failed: {e}"),
@@ -63,19 +63,19 @@
 //! let client = NonceClient::new(b"secret");
 //! let server = NonceServer::new(b"secret", None, None);
 //!
-//! let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+//! let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 //!     mac.update(timestamp.as_bytes());
 //!     mac.update(nonce.as_bytes());
 //! })?;
 //!
 //! // Same nonce can be used in different contexts
-//! server.verify_auth_data(&auth_data, Some("api_v1"), |mac| {
-//!     mac.update(auth_data.timestamp.to_string().as_bytes());
-//!     mac.update(auth_data.nonce.as_bytes());
+//! server.verify_protection_data(&protection_data, Some("api_v1"), |mac| {
+//!     mac.update(protection_data.timestamp.to_string().as_bytes());
+//!     mac.update(protection_data.nonce.as_bytes());
 //! }).await?;
-//! server.verify_auth_data(&auth_data, Some("api_v2"), |mac| {
-//!     mac.update(auth_data.timestamp.to_string().as_bytes());
-//!     mac.update(auth_data.nonce.as_bytes());
+//! server.verify_protection_data(&protection_data, Some("api_v2"), |mac| {
+//!     mac.update(protection_data.timestamp.to_string().as_bytes());
+//!     mac.update(protection_data.nonce.as_bytes());
 //! }).await?;
 //! # Ok(())
 //! # }
@@ -101,7 +101,7 @@
 //!
 //! - **[`NonceClient`]**: Lightweight client for generating signed requests
 //! - **[`NonceServer`]**: Server-side verification and nonce management
-//! - **[`AuthData`]**: The data structure exchanged between client and server
+//! - **[`ProtectionData`]**: The data structure exchanged between client and server
 //! - **[`NonceError`]**: Comprehensive error handling for all failure modes
 
 use hmac::Hmac;
@@ -125,7 +125,7 @@ type HmacSha256 = Hmac<Sha256>;
 ///
 /// # Purpose
 ///
-/// `AuthData` represents only the authentication portion of a request:
+/// `ProtectionData` represents only the authentication portion of a request:
 /// - It does not contain application payload or business logic data
 /// - It focuses solely on cryptographic verification and replay prevention
 /// - It can be embedded in larger request structures or sent as headers
@@ -144,11 +144,11 @@ type HmacSha256 = Hmac<Sha256>;
 /// # Example
 ///
 /// ```rust
-/// use nonce_auth::{NonceClient, AuthData};
+/// use nonce_auth::{NonceClient, ProtectionData};
 /// use hmac::Mac;
 ///
 /// let client = NonceClient::new(b"secret");
-/// let auth_data: AuthData = client.create_auth_data(|mac, timestamp, nonce| {
+/// let protection_data: ProtectionData = client.create_protection_data(|mac, timestamp, nonce| {
 ///     mac.update(timestamp.as_bytes());
 ///     mac.update(nonce.as_bytes());
 /// }).unwrap();
@@ -157,12 +157,12 @@ type HmacSha256 = Hmac<Sha256>;
 /// #[derive(serde::Serialize)]
 /// struct ApiRequest {
 ///     payload: String,
-///     auth: AuthData,
+///     auth: ProtectionData,
 /// }
 ///
 /// let request = ApiRequest {
 ///     payload: "application data".to_string(),
-///     auth: auth_data,
+///     auth: protection_data,
 /// };
 /// ```
 ///
@@ -173,7 +173,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// - The signature proves the authentication data hasn't been tampered with
 /// - The signature algorithm is flexible and can include additional request data
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthData {
+pub struct ProtectionData {
     /// Unix timestamp (seconds since epoch) when this authentication data was created.
     ///
     /// Used by the server to validate that the authentication attempt is within the
@@ -218,50 +218,50 @@ mod tests {
             Some(Duration::from_secs(300)), // 5 min time window
         );
 
-        // Client creates auth data with custom signature
-        let request = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        // Client creates protection data with custom signature
+        let protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
 
-        // Server verifies the request with matching signature algorithm
+        // Server verifies the protection data with matching signature algorithm
         assert!(
             server
-                .verify_auth_data(&request, None, |mac| {
-                    mac.update(request.timestamp.to_string().as_bytes());
-                    mac.update(request.nonce.as_bytes());
+                .verify_protection_data(&protection_data, None, |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
 
-        // Test duplicate request detection
+        // Test duplicate protection data detection
         assert!(matches!(
             server
-                .verify_auth_data(&request, None, |mac| {
-                    mac.update(request.timestamp.to_string().as_bytes());
-                    mac.update(request.nonce.as_bytes());
+                .verify_protection_data(&protection_data, None, |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::DuplicateNonce)
         ));
 
         // Test invalid signature
-        let mut bad_request = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let mut bad_protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
-        bad_request.signature = "invalid_signature".to_string();
+        bad_protection_data.signature = "invalid_signature".to_string();
 
         assert!(matches!(
             server
-                .verify_auth_data(&bad_request, None, |mac| {
-                    mac.update(bad_request.timestamp.to_string().as_bytes());
-                    mac.update(bad_request.nonce.as_bytes());
+                .verify_protection_data(&bad_protection_data, None, |mac| {
+                    mac.update(bad_protection_data.timestamp.to_string().as_bytes());
+                    mac.update(bad_protection_data.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::InvalidSignature)
@@ -278,9 +278,9 @@ mod tests {
         let client = NonceClient::new(TEST_SECRET);
         let server = NonceServer::new(TEST_SECRET, None, None);
 
-        // Create one auth data to test context isolation
-        let auth_data = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        // Create one protection data to test context isolation
+        let protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
@@ -289,39 +289,39 @@ mod tests {
         // Same nonce can be used in different contexts
         assert!(
             server
-                .verify_auth_data(&auth_data, Some("context1"), |mac| {
-                    mac.update(auth_data.timestamp.to_string().as_bytes());
-                    mac.update(auth_data.nonce.as_bytes());
+                .verify_protection_data(&protection_data, Some("context1"), |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
         assert!(
             server
-                .verify_auth_data(&auth_data, Some("context2"), |mac| {
-                    mac.update(auth_data.timestamp.to_string().as_bytes());
-                    mac.update(auth_data.nonce.as_bytes());
+                .verify_protection_data(&protection_data, Some("context2"), |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
         assert!(
             server
-                .verify_auth_data(&auth_data, Some("context3"), |mac| {
-                    mac.update(auth_data.timestamp.to_string().as_bytes());
-                    mac.update(auth_data.nonce.as_bytes());
+                .verify_protection_data(&protection_data, Some("context3"), |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
 
         // But cannot be reused in the same context
-        let auth_data_copy = auth_data.clone();
+        let protection_data_copy = protection_data.clone();
         assert!(matches!(
             server
-                .verify_auth_data(&auth_data_copy, Some("context1"), |mac| {
-                    mac.update(auth_data_copy.timestamp.to_string().as_bytes());
-                    mac.update(auth_data_copy.nonce.as_bytes());
+                .verify_protection_data(&protection_data_copy, Some("context1"), |mac| {
+                    mac.update(protection_data_copy.timestamp.to_string().as_bytes());
+                    mac.update(protection_data_copy.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::DuplicateNonce)
@@ -330,21 +330,21 @@ mod tests {
         // Test with no context (NULL context)
         assert!(
             server
-                .verify_auth_data(&auth_data, None, |mac| {
-                    mac.update(auth_data.timestamp.to_string().as_bytes());
-                    mac.update(auth_data.nonce.as_bytes());
+                .verify_protection_data(&protection_data, None, |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
 
         // Cannot reuse with no context
-        let auth_data_copy2 = auth_data.clone();
+        let protection_data_copy2 = protection_data.clone();
         assert!(matches!(
             server
-                .verify_auth_data(&auth_data_copy2, None, |mac| {
-                    mac.update(auth_data_copy2.timestamp.to_string().as_bytes());
-                    mac.update(auth_data_copy2.nonce.as_bytes());
+                .verify_protection_data(&protection_data_copy2, None, |mac| {
+                    mac.update(protection_data_copy2.timestamp.to_string().as_bytes());
+                    mac.update(protection_data_copy2.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::DuplicateNonce)
@@ -365,7 +365,7 @@ mod tests {
             Some(Duration::from_secs(60)), // 1 minute window
         );
 
-        // Create auth data with old timestamp
+        // Create protection data with old timestamp
         let old_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -382,7 +382,7 @@ mod tests {
             })
             .unwrap();
 
-        let old_auth_data = crate::AuthData {
+        let old_protection_data = crate::ProtectionData {
             timestamp: old_timestamp,
             nonce,
             signature,
@@ -390,9 +390,9 @@ mod tests {
 
         assert!(matches!(
             server
-                .verify_auth_data(&old_auth_data, None, |mac| {
-                    mac.update(old_auth_data.timestamp.to_string().as_bytes());
-                    mac.update(old_auth_data.nonce.as_bytes());
+                .verify_protection_data(&old_protection_data, None, |mac| {
+                    mac.update(old_protection_data.timestamp.to_string().as_bytes());
+                    mac.update(old_protection_data.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::TimestampOutOfWindow)
@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_nonce_expiration() {
+    async fn test_protection_data_expiration() {
         unsafe {
             std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
         }
@@ -433,8 +433,8 @@ mod tests {
             Some(Duration::from_secs(300)),
         );
 
-        let auth_data = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
@@ -443,21 +443,21 @@ mod tests {
         // First verification should succeed
         assert!(
             server
-                .verify_auth_data(&auth_data, None, |mac| {
-                    mac.update(auth_data.timestamp.to_string().as_bytes());
-                    mac.update(auth_data.nonce.as_bytes());
+                .verify_protection_data(&protection_data, None, |mac| {
+                    mac.update(protection_data.timestamp.to_string().as_bytes());
+                    mac.update(protection_data.nonce.as_bytes());
                 })
                 .await
                 .is_ok()
         );
 
         // Second verification with same nonce should fail (already consumed)
-        let duplicate_auth_data = auth_data.clone();
+        let duplicate_protection_data = protection_data.clone();
         assert!(matches!(
             server
-                .verify_auth_data(&duplicate_auth_data, None, |mac| {
-                    mac.update(duplicate_auth_data.timestamp.to_string().as_bytes());
-                    mac.update(duplicate_auth_data.nonce.as_bytes());
+                .verify_protection_data(&duplicate_protection_data, None, |mac| {
+                    mac.update(duplicate_protection_data.timestamp.to_string().as_bytes());
+                    mac.update(duplicate_protection_data.nonce.as_bytes());
                 })
                 .await,
             Err(NonceError::DuplicateNonce)
@@ -506,21 +506,21 @@ mod tests {
     #[tokio::test]
     async fn test_serialization() {
         let client = NonceClient::new(TEST_SECRET);
-        let auth_data = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
 
         // Test JSON serialization
-        let json = serde_json::to_string(&auth_data).unwrap();
+        let json = serde_json::to_string(&protection_data).unwrap();
         assert!(!json.is_empty());
 
         // Test deserialization
-        let deserialized: crate::AuthData = serde_json::from_str(&json).unwrap();
-        assert_eq!(auth_data.timestamp, deserialized.timestamp);
-        assert_eq!(auth_data.nonce, deserialized.nonce);
-        assert_eq!(auth_data.signature, deserialized.signature);
+        let deserialized: crate::ProtectionData = serde_json::from_str(&json).unwrap();
+        assert_eq!(protection_data.timestamp, deserialized.timestamp);
+        assert_eq!(protection_data.nonce, deserialized.nonce);
+        assert_eq!(protection_data.signature, deserialized.signature);
     }
 }

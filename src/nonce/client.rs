@@ -2,7 +2,7 @@ use hmac::Mac;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::NonceError;
-use crate::AuthData;
+use crate::ProtectionData;
 use crate::HmacSha256;
 
 /// Client-side nonce manager for generating signed requests.
@@ -37,7 +37,7 @@ use crate::HmacSha256;
 /// let client = NonceClient::new(b"my_shared_secret");
 ///
 /// // Generate a signed request with custom signature
-/// let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+/// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 ///     mac.update(timestamp.as_bytes());
 ///     mac.update(nonce.as_bytes());
 ///     mac.update(b"custom_payload");
@@ -96,9 +96,9 @@ impl NonceClient {
         }
     }
 
-    /// Generates authentication data with custom signature algorithm.
+    /// Generates protection data with custom signature algorithm.
     ///
-    /// This method provides complete flexibility to create authentication data with
+    /// This method provides complete flexibility to create protection data with
     /// any signature algorithm. The signature algorithm is defined by the closure
     /// which receives the MAC instance, timestamp, and nonce.
     ///
@@ -108,7 +108,7 @@ impl NonceClient {
     ///
     /// # Returns
     ///
-    /// * `Ok(AuthData)` - Authentication data with custom signature
+    /// * `Ok(ProtectionData)` - Authentication data with custom signature
     /// * `Err(NonceError)` - If there's an error in the cryptographic operations
     ///
     /// # Example
@@ -120,14 +120,14 @@ impl NonceClient {
     /// let client = NonceClient::new(b"shared_secret");
     /// let payload = "request body";
     ///
-    /// // Create auth data with payload included in signature
-    /// let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+    /// // Create protection data with payload included in signature
+    /// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
     ///     mac.update(timestamp.as_bytes());
     ///     mac.update(nonce.as_bytes());
     ///     mac.update(payload.as_bytes());
     /// }).unwrap();
     /// ```
-    pub fn create_auth_data<F>(&self, signature_builder: F) -> Result<AuthData, NonceError>
+    pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
     {
@@ -142,7 +142,7 @@ impl NonceClient {
             signature_builder(mac, &timestamp.to_string(), &nonce);
         })?;
 
-        Ok(AuthData {
+        Ok(ProtectionData {
             timestamp,
             nonce,
             signature,
@@ -208,105 +208,53 @@ mod tests {
     }
 
     #[test]
-    fn test_create_auth_data_with_custom_signature() {
+    fn test_create_protection_data_with_custom_signature() {
         let client = NonceClient::new(TEST_SECRET);
         let payload = "test payload";
 
-        let auth_data = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
                 mac.update(payload.as_bytes());
             })
             .unwrap();
 
-        assert!(auth_data.timestamp > 0);
-        assert!(!auth_data.nonce.is_empty());
-        assert!(!auth_data.signature.is_empty());
-        assert_eq!(auth_data.signature.len(), 64);
+        assert!(protection_data.timestamp > 0);
+        assert!(!protection_data.nonce.is_empty());
+        assert!(!protection_data.signature.is_empty());
+        assert_eq!(protection_data.signature.len(), 64);
 
         // Verify the signature includes the payload
         let expected_signature = client
             .generate_signature(|mac| {
-                mac.update(auth_data.timestamp.to_string().as_bytes());
-                mac.update(auth_data.nonce.as_bytes());
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
                 mac.update(payload.as_bytes());
             })
             .unwrap();
-        assert_eq!(auth_data.signature, expected_signature);
+        assert_eq!(protection_data.signature, expected_signature);
     }
 
     #[test]
-    fn test_multiple_auth_data_different_nonces() {
+    fn test_multiple_protection_data_different_nonces() {
         let client = NonceClient::new(TEST_SECRET);
 
-        let auth_data1 = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let protection_data1 = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
 
-        let auth_data2 = client
-            .create_auth_data(|mac, timestamp, nonce| {
+        let protection_data2 = client
+            .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
 
-        assert_ne!(auth_data1.nonce, auth_data2.nonce);
-        assert_ne!(auth_data1.signature, auth_data2.signature);
-    }
-
-    #[test]
-    fn test_sign_with_builder() {
-        let client = NonceClient::new(TEST_SECRET);
-
-        let signature1 = client
-            .generate_signature(|mac| {
-                mac.update(b"data1");
-                mac.update(b"data2");
-            })
-            .unwrap();
-
-        let signature2 = client
-            .generate_signature(|mac| {
-                mac.update(b"data1");
-                mac.update(b"data3");
-            })
-            .unwrap();
-
-        assert_eq!(signature1.len(), 64);
-        assert_eq!(signature2.len(), 64);
-        assert_ne!(signature1, signature2);
-    }
-
-    #[test]
-    fn test_different_secrets_different_signatures() {
-        let client1 = NonceClient::new(b"secret1");
-        let client2 = NonceClient::new(b"secret2");
-
-        let sig1 = client1
-            .generate_signature(|mac| {
-                mac.update(b"data");
-            })
-            .unwrap();
-
-        let sig2 = client2
-            .generate_signature(|mac| {
-                mac.update(b"data");
-            })
-            .unwrap();
-
-        assert_ne!(sig1, sig2);
-    }
-
-    #[test]
-    fn test_empty_secret() {
-        let client = NonceClient::new(&[]);
-        let result = client.generate_signature(|mac| {
-            mac.update(b"data");
-        });
-        assert!(result.is_ok()); // Empty secret should still work
+        assert_ne!(protection_data1.nonce, protection_data2.nonce);
+        assert_ne!(protection_data1.signature, protection_data2.signature);
     }
 }

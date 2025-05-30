@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use turbosql::{Turbosql, execute, select};
 
 use super::{NonceError, record::NonceRecord};
-use crate::AuthData;
+use crate::ProtectionData;
 use crate::HmacSha256;
 
 /// Server-side nonce manager for verifying signed requests and managing nonce storage.
@@ -115,7 +115,7 @@ impl NonceServer {
     ///
     /// # Arguments
     ///
-    /// * `auth_data` - The authentication data containing timestamp, nonce, and signature
+    /// * `protection_data` - The authentication data containing timestamp, nonce, and signature
     /// * `context` - Optional context for nonce scoping
     /// * `signature_builder` - A closure that defines how to build the signature data
     ///
@@ -127,14 +127,14 @@ impl NonceServer {
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::{NonceServer, AuthData};
+    /// use nonce_auth::{NonceServer, ProtectionData};
     /// use std::time::Duration;
     /// use hmac::Mac;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # NonceServer::init().await?;
     /// let server = NonceServer::new(b"secret", None, None);
-    /// let auth_data = AuthData {
+    /// let protection_data = ProtectionData {
     ///     timestamp: 1234567890,
     ///     nonce: "unique-nonce".to_string(),
     ///     signature: "expected-signature".to_string(),
@@ -144,18 +144,18 @@ impl NonceServer {
     /// let payload = "request body";
     /// let method = "POST";
     ///
-    /// server.verify_auth_data(&auth_data, None, |mac| {
-    ///     mac.update(auth_data.timestamp.to_string().as_bytes());
-    ///     mac.update(auth_data.nonce.as_bytes());
+    /// server.verify_protection_data(&protection_data, None, |mac| {
+    ///     mac.update(protection_data.timestamp.to_string().as_bytes());
+    ///     mac.update(protection_data.nonce.as_bytes());
     ///     mac.update(payload.as_bytes());
     ///     mac.update(method.as_bytes());
     /// }).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn verify_auth_data<F>(
+    pub async fn verify_protection_data<F>(
         &self,
-        auth_data: &AuthData,
+        protection_data: &ProtectionData,
         context: Option<&str>,
         signature_builder: F,
     ) -> Result<(), NonceError>
@@ -163,13 +163,13 @@ impl NonceServer {
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
     {
         // 1. Verify timestamp is within allowed window
-        self.verify_timestamp(auth_data.timestamp)?;
+        self.verify_timestamp(protection_data.timestamp)?;
 
         // 2. Verify signature with custom builder
-        self.verify_signature(&auth_data.signature, signature_builder)?;
+        self.verify_signature(&protection_data.signature, signature_builder)?;
 
         // 3. Verify nonce is valid and not used
-        self.verify_and_consume_nonce(&auth_data.nonce, context)
+        self.verify_and_consume_nonce(&protection_data.nonce, context)
             .await?;
 
         Ok(())

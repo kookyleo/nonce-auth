@@ -88,17 +88,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(psk);
 
     // Client generates authentication data with custom signature (timestamp + nonce)
-    let auth_data = client.create_auth_data(|mac, timestamp, nonce| {
+    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
         mac.update(timestamp.as_bytes());
         mac.update(nonce.as_bytes());
     })?;
-    println!("Generated authentication data: {auth_data:?}");
+    println!("Generated authentication data: {protection_data:?}");
 
     // Server verifies the authentication data with matching signature algorithm
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {
@@ -108,9 +108,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try to use the same nonce again (should fail)
     match server
-        .verify_auth_data(&auth_data, None, |mac| {
-            mac.update(auth_data.timestamp.to_string().as_bytes());
-            mac.update(auth_data.nonce.as_bytes());
+        .verify_protection_data(&protection_data, None, |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
         })
         .await
     {
@@ -226,7 +226,7 @@ use warp::Filter;
 struct AuthenticatedRequest {
     payload: String,
     session_id: String,
-    auth: nonce_auth::AuthData,
+    auth: nonce_auth::ProtectionData,
 }
 
 #[derive(Serialize)]
@@ -310,7 +310,7 @@ async fn handle_protected_request(
 
     // Verify the request with custom signature including payload
     match server
-        .verify_auth_data(&req.auth, None, |mac| {
+        .verify_protection_data(&req.auth, None, |mac| {
             mac.update(req.auth.timestamp.to_string().as_bytes());
             mac.update(req.auth.nonce.as_bytes());
             mac.update(req.payload.as_bytes());
@@ -409,7 +409,7 @@ pub fn new(secret: &[u8]) -> Self
 ##### Create Authentication Data
 
 ```rust
-pub fn create_auth_data<F>(&self, signature_builder: F) -> Result<AuthData, NonceError>
+pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
 where
     F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
 ```
@@ -447,9 +447,9 @@ pub fn new(
 ##### Verify Authentication Data
 
 ```rust
-pub async fn verify_auth_data<F>(
+pub async fn verify_protection_data<F>(
     &self, 
-    auth_data: &AuthData, 
+    protection_data: &ProtectionData, 
     context: Option<&str>,
     signature_builder: F,
 ) -> Result<(), NonceError>
@@ -467,10 +467,10 @@ pub async fn init() -> Result<(), NonceError>
 
 Creates necessary database tables and indexes.
 
-### AuthData
+### ProtectionData
 
 ```rust
-pub struct AuthData {
+pub struct ProtectionData {
     pub timestamp: u64,    // Unix timestamp
     pub nonce: String,     // UUID format one-time token
     pub signature: String, // HMAC-SHA256 signature
