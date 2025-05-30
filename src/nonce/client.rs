@@ -2,8 +2,8 @@ use hmac::Mac;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::NonceError;
-use crate::ProtectionData;
 use crate::HmacSha256;
+use crate::ProtectionData;
 
 /// Client-side nonce manager for generating signed requests.
 ///
@@ -127,7 +127,10 @@ impl NonceClient {
     ///     mac.update(payload.as_bytes());
     /// }).unwrap();
     /// ```
-    pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
+    pub fn create_protection_data<F>(
+        &self,
+        signature_builder: F,
+    ) -> Result<ProtectionData, NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
     {

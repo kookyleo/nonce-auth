@@ -120,7 +120,8 @@ print_info "3. Checking code format..."
 if ! cargo fmt --all -- --check; then
     print_error "Code format check failed, auto-fixing..."
     cargo fmt --all
-    print_warning "Code format has been auto-fixed, please review changes"
+    print_warning "Code format has been auto-fixed, please review changes and commit"
+    exit 1
 fi
 
 # 4. Run Clippy check
