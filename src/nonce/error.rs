@@ -163,8 +163,8 @@ pub enum NonceError {
     CryptoError(String),
 }
 
-impl From<turbosql::Error> for NonceError {
-    /// Converts a `turbosql::Error` into a `NonceError`.
+impl From<rusqlite::Error> for NonceError {
+    /// Converts a `rusqlite::Error` into a `NonceError`.
     ///
     /// This implementation provides automatic conversion from database
     /// errors to appropriate `NonceError` variants. It specifically
@@ -175,11 +175,14 @@ impl From<turbosql::Error> for NonceError {
     ///
     /// - UNIQUE constraint failures → `DuplicateNonce`
     /// - All other database errors → `DatabaseError`
-    fn from(err: turbosql::Error) -> Self {
-        if err.to_string().contains("UNIQUE constraint failed") {
-            NonceError::DuplicateNonce
-        } else {
-            NonceError::DatabaseError(err.to_string())
+    fn from(err: rusqlite::Error) -> Self {
+        match err {
+            rusqlite::Error::SqliteFailure(sqlite_err, _) 
+                if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
+                && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => {
+                NonceError::DuplicateNonce
+            },
+            _ => NonceError::DatabaseError(err.to_string()),
         }
     }
 }
@@ -226,15 +229,25 @@ mod tests {
 
     #[test]
     fn test_error_conversion_logic() {
-        // Test the conversion logic by checking string patterns
-        // This tests the From implementation without creating actual turbosql errors
+        // Test the conversion logic by checking error patterns
+        // This tests the From implementation without creating actual rusqlite errors
 
         // Test that UNIQUE constraint errors would be converted to DuplicateNonce
-        let unique_msg = "UNIQUE constraint failed: noncerecord.nonce";
-        assert!(unique_msg.contains("UNIQUE constraint failed"));
+        let unique_error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+            Some("UNIQUE constraint failed".to_string())
+        );
+        
+        match NonceError::from(unique_error) {
+            NonceError::DuplicateNonce => {},
+            _ => panic!("Expected DuplicateNonce error"),
+        }
 
         // Test that other errors would be converted to DatabaseError
-        let other_msg = "database is locked";
-        assert!(!other_msg.contains("UNIQUE constraint failed"));
+        let other_error = rusqlite::Error::SqliteSingleThreadedMode;
+        match NonceError::from(other_error) {
+            NonceError::DatabaseError(_) => {},
+            _ => panic!("Expected DatabaseError"),
+        }
     }
 }

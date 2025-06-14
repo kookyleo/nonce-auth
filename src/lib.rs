@@ -83,14 +83,14 @@
 //!
 //! ## Database Configuration
 //!
-//! The SQLite database location can be configured using the `TURBOSQL_DB_PATH` environment variable:
+//! The SQLite database location can be configured using the `NONCE_AUTH_DB_PATH` environment variable:
 //!
 //! ```bash
 //! # Use a specific file
-//! export TURBOSQL_DB_PATH="/path/to/nonce_auth.db"
+//! export NONCE_AUTH_DB_PATH="/path/to/nonce_auth.db"
 //!
 //! # Use in-memory database (for testing)
-//! export TURBOSQL_DB_PATH=":memory:"
+//! export NONCE_AUTH_DB_PATH=":memory:"
 //! ```
 //!
 //! If not set, it defaults to `nonce_auth.db` in the current directory.
@@ -111,7 +111,7 @@ use sha2::Sha256;
 pub mod nonce;
 
 // Re-export commonly used types
-pub use nonce::{NonceClient, NonceError, NonceServer};
+pub use nonce::{NonceClient, NonceError, NonceServer, NonceConfig};
 
 /// Internal type alias for HMAC-SHA256 operations.
 type HmacSha256 = Hmac<Sha256>;
@@ -207,7 +207,7 @@ mod tests {
     async fn test_client_server_separation() {
         // Initialize database
         unsafe {
-            std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
+            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
         }
         NonceServer::init().await.unwrap();
 
@@ -271,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn test_context_isolation() {
         unsafe {
-            std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
+            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
         }
         NonceServer::init().await.unwrap();
 
@@ -354,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn test_timestamp_validation() {
         unsafe {
-            std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
+            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
         }
         NonceServer::init().await.unwrap();
 
@@ -422,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn test_protection_data_expiration() {
         unsafe {
-            std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
+            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
         }
         NonceServer::init().await.unwrap();
 
@@ -467,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_expired() {
         unsafe {
-            std::env::set_var("TURBOSQL_DB_PATH", ":memory:");
+            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
         }
         NonceServer::init().await.unwrap();
 

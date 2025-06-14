@@ -538,7 +538,7 @@ pub enum NonceError {
 
 - `hmac` - HMAC 签名
 - `sha2` - SHA256 哈希
-- `turbosql` - SQLite ORM
+- `rusqlite` - SQLite 数据库库
 - `uuid` - UUID 生成
 - `serde` - 序列化支持
 - `tokio` - 异步运行时

@@ -1,9 +1,7 @@
 use hmac::Mac;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-#[cfg(not(docsrs))]
-use turbosql::{Turbosql, execute, select};
 
-use super::{NonceError, record::NonceRecord};
+use super::{NonceError, database::get_database};
 use crate::HmacSha256;
 use crate::ProtectionData;
 
@@ -25,7 +23,7 @@ use crate::ProtectionData;
 /// # Database Storage
 ///
 /// The server uses SQLite for persistent nonce storage. The database location
-/// can be configured using the `TURBOSQL_DB_PATH` environment variable.
+/// can be configured using the `NONCE_AUTH_DB_PATH` environment variable.
 /// If not set, it defaults to `nonce_auth.db` in the current directory.
 ///
 /// # Example
@@ -182,7 +180,7 @@ impl NonceServer {
     ///
     /// # Database Configuration
     ///
-    /// The database location can be configured using the `TURBOSQL_DB_PATH` environment variable:
+    /// The database location can be configured using the `NONCE_AUTH_DB_PATH` environment variable:
     /// - If set to `:memory:`, uses an in-memory database (useful for testing)
     /// - If set to a file path, uses that file for persistent storage
     /// - If not set, defaults to `nonce_auth.db` in the current directory
@@ -191,8 +189,8 @@ impl NonceServer {
     ///
     /// Creates the following table:
     /// ```sql
-    /// CREATE TABLE noncerecord (
-    ///     rowid INTEGER PRIMARY KEY,
+    /// CREATE TABLE nonce_record (
+    ///     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ///     nonce TEXT NOT NULL,
     ///     created_at INTEGER NOT NULL,
     ///     context TEXT,
@@ -200,14 +198,10 @@ impl NonceServer {
     /// );
     /// ```
     ///
-    /// And the following indexes for performance:
-    /// - `idx_nonce_context` on `(nonce, context)` for fast nonce lookups
-    /// - `idx_created_at` on `created_at` for efficient cleanup operations
-    ///
     /// # Returns
     ///
-    /// * `Ok(())` - If initialization completed successfully
-    /// * `Err(NonceError::DatabaseError)` - If there was a database error during initialization
+    /// * `Ok(())` - If database initialization succeeded
+    /// * `Err(NonceError::DatabaseError)` - If there was a database error
     ///
     /// # Example
     ///
@@ -219,34 +213,14 @@ impl NonceServer {
     /// NonceServer::init().await?;
     ///
     /// // Or configure database location via environment variable
-    /// unsafe { std::env::set_var("TURBOSQL_DB_PATH", "/path/to/nonce_auth.db"); }
+    /// unsafe { std::env::set_var("NONCE_AUTH_DB_PATH", "/path/to/nonce_auth.db"); }
     /// NonceServer::init().await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn init() -> Result<(), NonceError> {
-        #[cfg(not(docsrs))]
-        {
-            // This will create the table if it doesn't exist
-            execute!(
-                r#"
-                CREATE TABLE IF NOT EXISTS noncerecord (
-                    rowid INTEGER PRIMARY KEY,
-                    nonce TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    context TEXT,
-                    UNIQUE(nonce, context)
-                )
-                "#
-            )?;
-
-            // Create index for faster lookups
-            execute!(
-                "CREATE INDEX IF NOT EXISTS idx_nonce_context ON noncerecord (nonce, context)"
-            )?;
-            execute!("CREATE INDEX IF NOT EXISTS idx_created_at ON noncerecord (created_at)")?;
-        }
-
+        let db = get_database()?;
+        db.init_schema()?;
         Ok(())
     }
 
@@ -346,49 +320,32 @@ impl NonceServer {
         nonce: &str,
         context: Option<&str>,
     ) -> Result<(), NonceError> {
-        #[cfg(not(docsrs))]
-        {
-            // Check if nonce already exists (has been used)
-            let existing_records: Vec<NonceRecord> = if let Some(ctx) = context {
-                select!(
-                    Vec<NonceRecord>
-                    "WHERE nonce = ? AND context = ?",
-                    nonce, ctx
-                )?
-            } else {
-                select!(
-                    Vec<NonceRecord>
-                    "WHERE nonce = ? AND context IS NULL",
-                    nonce
-                )?
-            };
-
-            if !existing_records.is_empty() {
-                // Check if it's expired
-                if existing_records[0].is_expired(self.default_ttl) {
-                    return Err(NonceError::ExpiredNonce);
-                }
-                return Err(NonceError::DuplicateNonce);
+        let db = get_database()?;
+        
+        // Check if nonce already exists (has been used)
+        if let Some((_, created_at)) = db.nonce_exists(nonce, context)? {
+            // Check if it's expired
+            if Self::is_time_expired(created_at, self.default_ttl) {
+                return Err(NonceError::ExpiredNonce);
             }
-
-            // Store the nonce to mark it as used
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
-
-            let record =
-                NonceRecord::create(nonce.to_string(), now, context.map(|s| s.to_string()));
-            record.insert()?;
-
-            // Clean up expired nonces in the background
-            let ttl = self.default_ttl;
-            tokio::spawn(async move {
-                if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
-                    eprintln!("Failed to clean up expired nonces: {e}");
-                }
-            });
+            return Err(NonceError::DuplicateNonce);
         }
+
+        // Store the nonce to mark it as used
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        db.insert_nonce(nonce, now, context)?;
+
+        // Clean up expired nonces in the background
+        let ttl = self.default_ttl;
+        tokio::spawn(async move {
+            if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
+                eprintln!("Failed to clean up expired nonces: {e}");
+            }
+        });
 
         Ok(())
     }
@@ -405,7 +362,7 @@ impl NonceServer {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - If cleanup completed successfully
+    /// * `Ok(usize)` - Number of records deleted
     /// * `Err(NonceError::DatabaseError)` - If there was a database error during cleanup
     ///
     /// # Example
@@ -417,24 +374,23 @@ impl NonceServer {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # NonceServer::init().await?;
     /// // Manual cleanup of nonces older than 1 hour
-    /// NonceServer::cleanup_expired_nonces(Duration::from_secs(3600)).await?;
+    /// let deleted_count = NonceServer::cleanup_expired_nonces(Duration::from_secs(3600)).await?;
+    /// println!("Deleted {} expired nonces", deleted_count);
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<(), NonceError> {
-        #[cfg(not(docsrs))]
-        {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+    pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<usize, NonceError> {
+        let db = get_database()?;
+        
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
 
-            let cutoff_time = now - ttl.as_secs() as i64;
-
-            execute!("DELETE FROM noncerecord WHERE created_at <= ?", cutoff_time)?;
-        }
-
-        Ok(())
+        let cutoff_time = now - ttl.as_secs() as i64;
+        let deleted_count = db.cleanup_expired(cutoff_time)?;
+        
+        Ok(deleted_count)
     }
 
     /// Returns the default TTL (time-to-live) duration for nonce records.
@@ -459,5 +415,84 @@ impl NonceServer {
     /// The time window duration configured for this server instance.
     pub fn time_window(&self) -> Duration {
         self.time_window
+    }
+
+    /// Checks if a nonce with given creation time has expired based on the given TTL.
+    ///
+    /// A nonce is considered expired if the current time is greater than
+    /// the creation time plus the TTL duration.
+    ///
+    /// # Arguments
+    ///
+    /// * `created_at` - The creation timestamp
+    /// * `ttl` - The time-to-live duration for nonces
+    ///
+    /// # Returns
+    ///
+    /// * `true` - If the nonce has expired and should be cleaned up
+    /// * `false` - If the nonce is still valid
+    fn is_time_expired(created_at: i64, ttl: Duration) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        now > created_at + ttl.as_secs() as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_time_expired_not_expired() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let ttl = Duration::from_secs(300); // 5 minutes TTL
+        
+        // Not expired - created 100 seconds ago
+        assert!(!NonceServer::is_time_expired(now - 100, ttl));
+    }
+
+    #[test]
+    fn test_is_time_expired_expired() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let ttl = Duration::from_secs(300); // 5 minutes TTL
+        
+        // Expired - created 400 seconds ago
+        assert!(NonceServer::is_time_expired(now - 400, ttl));
+    }
+
+    #[test]
+    fn test_is_time_expired_edge_case() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let ttl = Duration::from_secs(300); // 5 minutes TTL
+        
+        // Edge case - created 301 seconds ago (1 second past TTL)
+        assert!(NonceServer::is_time_expired(now - 301, ttl));
+    }
+
+    #[test]
+    fn test_is_time_expired_future_created_at() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let ttl = Duration::from_secs(300); // 5 minutes TTL
+        
+        // Future timestamp (shouldn't happen in practice)
+        assert!(!NonceServer::is_time_expired(now + 100, ttl));
     }
 }

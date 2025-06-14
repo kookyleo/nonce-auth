@@ -540,7 +540,7 @@ pub enum NonceError {
 
 - `hmac` - HMAC signing
 - `sha2` - SHA256 hashing
-- `turbosql` - SQLite ORM
+- `rusqlite` - SQLite database library
 - `uuid` - UUID generation
 - `serde` - Serialization support
 - `tokio` - Async runtime
