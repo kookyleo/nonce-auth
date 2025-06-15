@@ -156,10 +156,11 @@ impl NonceConfig {
             config.db_path = db_path;
         }
 
-        if let Ok(cache_size) = std::env::var("NONCE_AUTH_CACHE_SIZE") {
-            if let Ok(size) = cache_size.parse() {
-                config.cache_size_kb = size;
-            }
+        if let Some(size) = std::env::var("NONCE_AUTH_CACHE_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            config.cache_size_kb = size;
         }
 
         if let Ok(wal_mode) = std::env::var("NONCE_AUTH_WAL_MODE") {
@@ -174,28 +175,32 @@ impl NonceConfig {
             config.temp_store = temp_store;
         }
 
-        if let Ok(batch_size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE") {
-            if let Ok(size) = batch_size.parse() {
-                config.cleanup_batch_size = size;
-            }
+        if let Some(size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            config.cleanup_batch_size = size;
         }
 
-        if let Ok(threshold) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD") {
-            if let Ok(thresh) = threshold.parse() {
-                config.cleanup_optimize_threshold = thresh;
-            }
+        if let Some(thresh) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            config.cleanup_optimize_threshold = thresh;
         }
 
-        if let Ok(ttl) = std::env::var("NONCE_AUTH_DEFAULT_TTL") {
-            if let Ok(secs) = ttl.parse() {
-                config.default_ttl = Duration::from_secs(secs);
-            }
+        if let Some(secs) = std::env::var("NONCE_AUTH_DEFAULT_TTL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            config.default_ttl = Duration::from_secs(secs);
         }
 
-        if let Ok(window) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW") {
-            if let Ok(secs) = window.parse() {
-                config.time_window = Duration::from_secs(secs);
-            }
+        if let Some(secs) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            config.time_window = Duration::from_secs(secs);
         }
 
         config
@@ -224,10 +229,11 @@ impl NonceConfig {
             self.db_path = db_path;
         }
 
-        if let Ok(cache_size) = std::env::var("NONCE_AUTH_CACHE_SIZE") {
-            if let Ok(size) = cache_size.parse() {
-                self.cache_size_kb = size;
-            }
+        if let Some(size) = std::env::var("NONCE_AUTH_CACHE_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            self.cache_size_kb = size;
         }
 
         if let Ok(wal_mode) = std::env::var("NONCE_AUTH_WAL_MODE") {
@@ -242,28 +248,32 @@ impl NonceConfig {
             self.temp_store = temp_store;
         }
 
-        if let Ok(batch_size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE") {
-            if let Ok(size) = batch_size.parse() {
-                self.cleanup_batch_size = size;
-            }
+        if let Some(size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            self.cleanup_batch_size = size;
         }
 
-        if let Ok(threshold) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD") {
-            if let Ok(thresh) = threshold.parse() {
-                self.cleanup_optimize_threshold = thresh;
-            }
+        if let Some(thresh) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            self.cleanup_optimize_threshold = thresh;
         }
 
-        if let Ok(ttl) = std::env::var("NONCE_AUTH_DEFAULT_TTL") {
-            if let Ok(secs) = ttl.parse() {
-                self.default_ttl = Duration::from_secs(secs);
-            }
+        if let Some(secs) = std::env::var("NONCE_AUTH_DEFAULT_TTL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            self.default_ttl = Duration::from_secs(secs);
         }
 
-        if let Ok(window) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW") {
-            if let Ok(secs) = window.parse() {
-                self.time_window = Duration::from_secs(secs);
-            }
+        if let Some(secs) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW")
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            self.time_window = Duration::from_secs(secs);
         }
 
         self
