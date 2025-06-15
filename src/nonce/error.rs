@@ -177,11 +177,12 @@ impl From<rusqlite::Error> for NonceError {
     /// - All other database errors → `DatabaseError`
     fn from(err: rusqlite::Error) -> Self {
         match err {
-            rusqlite::Error::SqliteFailure(sqlite_err, _) 
+            rusqlite::Error::SqliteFailure(sqlite_err, _)
                 if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
-                && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => {
+                    && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
                 NonceError::DuplicateNonce
-            },
+            }
             _ => NonceError::DatabaseError(err.to_string()),
         }
     }
@@ -235,18 +236,18 @@ mod tests {
         // Test that UNIQUE constraint errors would be converted to DuplicateNonce
         let unique_error = rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
-            Some("UNIQUE constraint failed".to_string())
+            Some("UNIQUE constraint failed".to_string()),
         );
-        
+
         match NonceError::from(unique_error) {
-            NonceError::DuplicateNonce => {},
+            NonceError::DuplicateNonce => {}
             _ => panic!("Expected DuplicateNonce error"),
         }
 
         // Test that other errors would be converted to DatabaseError
         let other_error = rusqlite::Error::SqliteSingleThreadedMode;
         match NonceError::from(other_error) {
-            NonceError::DatabaseError(_) => {},
+            NonceError::DatabaseError(_) => {}
             _ => panic!("Expected DatabaseError"),
         }
     }

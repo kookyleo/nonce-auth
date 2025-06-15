@@ -1,7 +1,7 @@
-use nonce_auth::{NonceServer, NonceClient};
-use nonce_auth::nonce::NonceConfig;
-use std::time::Duration;
 use hmac::Mac;
+use nonce_auth::nonce::NonceConfig;
+use nonce_auth::{NonceClient, NonceServer};
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Override specific settings if needed
         std::env::set_var("NONCE_AUTH_CACHE_SIZE", "16384"); // 16MB for demo
     }
-    
+
     // Configuration is automatically loaded from environment
     let config = NonceConfig::from_env();
     println!("Production Configuration (NONCE_AUTH_PRESET=production):");
@@ -35,10 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Simulate high-load scenario
     println!("Simulating high-load authentication scenario...");
-    
+
     let start = std::time::Instant::now();
     let mut successful_auths = 0;
-    
+
     for i in 0..100 {
         // Create protection data
         let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
@@ -48,11 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
         // Verify protection data
-        match server.verify_protection_data(&protection_data, Some("api_v1"), |mac| {
-            mac.update(protection_data.timestamp.to_string().as_bytes());
-            mac.update(protection_data.nonce.as_bytes());
-            mac.update(format!("request_{}", i).as_bytes());
-        }).await {
+        match server
+            .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+                mac.update(format!("request_{}", i).as_bytes());
+            })
+            .await
+        {
             Ok(()) => successful_auths += 1,
             Err(e) => println!("Authentication failed for request {}: {}", i, e),
         }
@@ -72,8 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cleanup_start = std::time::Instant::now();
     let deleted_count = NonceServer::cleanup_expired_nonces(Duration::from_secs(1)).await?;
     let cleanup_duration = cleanup_start.elapsed();
-    
-    println!("✓ Cleaned up {} expired nonces in {:?}\n", deleted_count, cleanup_duration);
+
+    println!(
+        "✓ Cleaned up {} expired nonces in {:?}\n",
+        deleted_count, cleanup_duration
+    );
 
     // 6. Test different configuration presets
     println!("=== Configuration Presets ===\n");
@@ -90,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. Configuration validation
     println!("=== Configuration Validation ===\n");
-    
+
     let configs = vec![
         ("Production", NonceConfig::production()),
         ("Development", NonceConfig::development()),
@@ -117,4 +123,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("5. Monitor database size and performance metrics");
 
     Ok(())
-} 
+}

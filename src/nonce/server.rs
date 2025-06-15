@@ -321,7 +321,7 @@ impl NonceServer {
         context: Option<&str>,
     ) -> Result<(), NonceError> {
         let db = get_database()?;
-        
+
         // Check if nonce already exists (has been used)
         if let Some((_, created_at)) = db.nonce_exists(nonce, context)? {
             // Check if it's expired
@@ -381,7 +381,7 @@ impl NonceServer {
     /// ```
     pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<usize, NonceError> {
         let db = get_database()?;
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -389,7 +389,7 @@ impl NonceServer {
 
         let cutoff_time = now - ttl.as_secs() as i64;
         let deleted_count = db.cleanup_expired(cutoff_time)?;
-        
+
         Ok(deleted_count)
     }
 
@@ -452,7 +452,7 @@ mod tests {
             .as_secs() as i64;
 
         let ttl = Duration::from_secs(300); // 5 minutes TTL
-        
+
         // Not expired - created 100 seconds ago
         assert!(!NonceServer::is_time_expired(now - 100, ttl));
     }
@@ -465,7 +465,7 @@ mod tests {
             .as_secs() as i64;
 
         let ttl = Duration::from_secs(300); // 5 minutes TTL
-        
+
         // Expired - created 400 seconds ago
         assert!(NonceServer::is_time_expired(now - 400, ttl));
     }
@@ -478,7 +478,7 @@ mod tests {
             .as_secs() as i64;
 
         let ttl = Duration::from_secs(300); // 5 minutes TTL
-        
+
         // Edge case - created 301 seconds ago (1 second past TTL)
         assert!(NonceServer::is_time_expired(now - 301, ttl));
     }
@@ -491,7 +491,7 @@ mod tests {
             .as_secs() as i64;
 
         let ttl = Duration::from_secs(300); // 5 minutes TTL
-        
+
         // Future timestamp (shouldn't happen in practice)
         assert!(!NonceServer::is_time_expired(now + 100, ttl));
     }

@@ -1,7 +1,7 @@
-use std::sync::{Arc, Mutex};
-use rusqlite::{Connection, params};
 use crate::NonceError;
 use crate::nonce::NonceConfig;
+use rusqlite::{Connection, params};
+use std::sync::{Arc, Mutex};
 
 /// Database connection manager for nonce storage.
 ///
@@ -33,7 +33,7 @@ use crate::nonce::NonceConfig;
 ///     context TEXT DEFAULT '',
 ///     UNIQUE(nonce, context)
 /// );
-/// 
+///
 /// -- Optimized indexes
 /// CREATE INDEX idx_nonce_context ON nonce_record (nonce, context);
 /// CREATE INDEX idx_created_at ON nonce_record (created_at);
@@ -92,58 +92,66 @@ impl Database {
         } else {
             Connection::open(&config.db_path)
         };
-        
+
         let connection = connection.map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         let db = Self {
             connection: Arc::new(Mutex::new(connection)),
             config,
         };
-        
+
         // Apply performance optimizations
         db.configure_performance()?;
-        
+
         Ok(db)
     }
-    
+
     /// Configures SQLite performance settings.
     ///
     /// This method applies various PRAGMA settings to optimize SQLite performance
     /// for the nonce authentication use case.
     fn configure_performance(&self) -> Result<(), NonceError> {
         let conn = self.connection.lock().unwrap();
-        
+
         // Set cache size (negative value means KB, positive means pages)
         conn.pragma_update(None, "cache_size", -self.config.cache_size_kb)
             .map_err(|e| NonceError::DatabaseError(format!("Failed to set cache_size: {}", e)))?;
-        
+
         // Enable WAL mode for better concurrency (only for file databases)
         if self.config.wal_mode && self.config.db_path != ":memory:" {
             conn.pragma_update(None, "journal_mode", "WAL")
-                .map_err(|e| NonceError::DatabaseError(format!("Failed to enable WAL mode: {}", e)))?;
+                .map_err(|e| {
+                    NonceError::DatabaseError(format!("Failed to enable WAL mode: {}", e))
+                })?;
         }
-        
+
         // Set synchronous mode
         conn.pragma_update(None, "synchronous", &self.config.sync_mode)
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to set synchronous mode: {}", e)))?;
-        
+            .map_err(|e| {
+                NonceError::DatabaseError(format!("Failed to set synchronous mode: {}", e))
+            })?;
+
         // Set temporary storage mode
         conn.pragma_update(None, "temp_store", &self.config.temp_store)
             .map_err(|e| NonceError::DatabaseError(format!("Failed to set temp_store: {}", e)))?;
-        
+
         // Enable foreign key constraints
         conn.pragma_update(None, "foreign_keys", true)
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to enable foreign keys: {}", e)))?;
-        
+            .map_err(|e| {
+                NonceError::DatabaseError(format!("Failed to enable foreign keys: {}", e))
+            })?;
+
         // Optimize for faster writes (trade-off with durability)
         if self.config.wal_mode && self.config.sync_mode == "NORMAL" {
             conn.pragma_update(None, "wal_autocheckpoint", 1000)
-                .map_err(|e| NonceError::DatabaseError(format!("Failed to set WAL autocheckpoint: {}", e)))?;
+                .map_err(|e| {
+                    NonceError::DatabaseError(format!("Failed to set WAL autocheckpoint: {}", e))
+                })?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Initializes the database schema with optimized indexes.
     ///
     /// Creates the `nonce_record` table and associated indexes if they don't exist.
@@ -172,7 +180,7 @@ impl Database {
     /// ```
     pub(crate) fn init_schema(&self) -> Result<(), NonceError> {
         let conn = self.connection.lock().unwrap();
-        
+
         // Create main table
         conn.execute(
             r#"
@@ -185,34 +193,37 @@ impl Database {
             )
             "#,
             [],
-        ).map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+        )
+        .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+
         // Create optimized indexes
         // Primary index for nonce existence checks
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_nonce_context ON nonce_record (nonce, context)",
             [],
-        ).map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+        )
+        .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+
         // Index for cleanup operations
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_created_at ON nonce_record (created_at)",
             [],
-        ).map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+        )
+        .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+
         // Composite index for context-specific operations
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_context_created_at ON nonce_record (context, created_at)",
             [],
         ).map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         // Analyze tables for query optimizer
         conn.execute("ANALYZE", [])
             .map_err(|e| NonceError::DatabaseError(format!("Failed to analyze tables: {}", e)))?;
-        
+
         Ok(())
     }
-    
+
     /// Checks if a nonce exists in the database.
     ///
     /// Searches for a nonce within the specified context. The context isolation
@@ -235,7 +246,7 @@ impl Database {
     /// // This is an internal API, not exposed publicly
     /// use nonce_auth::nonce::database::Database;
     /// let db = Database::new()?;
-    /// 
+    ///
     /// // Check if nonce exists in global context
     /// if let Some((id, created_at)) = db.nonce_exists("my-nonce", None)? {
     ///     println!("Nonce {} exists, created at {}", id, created_at);
@@ -247,24 +258,29 @@ impl Database {
     /// }
     /// # Ok::<(), nonce_auth::NonceError>(())
     /// ```
-    pub(crate) fn nonce_exists(&self, nonce: &str, context: Option<&str>) -> Result<Option<(i64, i64)>, NonceError> {
+    pub(crate) fn nonce_exists(
+        &self,
+        nonce: &str,
+        context: Option<&str>,
+    ) -> Result<Option<(i64, i64)>, NonceError> {
         let conn = self.connection.lock().unwrap();
         let context_value = context.unwrap_or("");
-        
-        let mut stmt = conn.prepare("SELECT id, created_at FROM nonce_record WHERE nonce = ? AND context = ?")
+
+        let mut stmt = conn
+            .prepare("SELECT id, created_at FROM nonce_record WHERE nonce = ? AND context = ?")
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         let result = stmt.query_row(params![nonce, context_value], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         });
-        
+
         match result {
             Ok(row) => Ok(Some(row)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(NonceError::DatabaseError(e.to_string())),
         }
     }
-    
+
     /// Inserts a new nonce record into the database.
     ///
     /// Attempts to insert a nonce with the given creation timestamp and context.
@@ -303,26 +319,32 @@ impl Database {
     /// // db.insert_nonce("unique-nonce", now, None)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub(crate) fn insert_nonce(&self, nonce: &str, created_at: i64, context: Option<&str>) -> Result<(), NonceError> {
+    pub(crate) fn insert_nonce(
+        &self,
+        nonce: &str,
+        created_at: i64,
+        context: Option<&str>,
+    ) -> Result<(), NonceError> {
         let conn = self.connection.lock().unwrap();
         let context_value = context.unwrap_or("");
-        
+
         let result = conn.execute(
             "INSERT INTO nonce_record (nonce, created_at, context) VALUES (?, ?, ?)",
             params![nonce, created_at, context_value],
         );
-        
+
         match result {
             Ok(_) => Ok(()),
-            Err(rusqlite::Error::SqliteFailure(sqlite_err, _)) 
+            Err(rusqlite::Error::SqliteFailure(sqlite_err, _))
                 if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
-                && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => {
+                    && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
                 Err(NonceError::DuplicateNonce)
-            },
+            }
             Err(e) => Err(NonceError::DatabaseError(e.to_string())),
         }
     }
-    
+
     /// Cleans up expired nonce records from the database.
     ///
     /// Removes all nonce records that were created before the specified cutoff time.
@@ -356,45 +378,50 @@ impl Database {
     /// ```
     pub(crate) fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> {
         let conn = self.connection.lock().unwrap();
-        
+
         // Use a transaction for better performance and consistency
-        let tx = conn.unchecked_transaction()
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to start transaction: {}", e)))?;
-        
+        let tx = conn.unchecked_transaction().map_err(|e| {
+            NonceError::DatabaseError(format!("Failed to start transaction: {}", e))
+        })?;
+
         // Delete in batches to avoid long-running transactions
         let batch_size = self.config.cleanup_batch_size;
         let mut total_deleted = 0;
-        
+
         loop {
-            let deleted = tx.execute(
-                "DELETE FROM nonce_record WHERE id IN (
+            let deleted = tx
+                .execute(
+                    "DELETE FROM nonce_record WHERE id IN (
                     SELECT id FROM nonce_record 
                     WHERE created_at <= ? 
                     LIMIT ?
                 )",
-                params![cutoff_time, batch_size],
-            ).map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-            
+                    params![cutoff_time, batch_size],
+                )
+                .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+
             total_deleted += deleted;
-            
+
             // If we deleted fewer than batch_size, we're done
             if deleted < batch_size {
                 break;
             }
         }
-        
-        tx.commit()
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to commit cleanup transaction: {}", e)))?;
-        
+
+        tx.commit().map_err(|e| {
+            NonceError::DatabaseError(format!("Failed to commit cleanup transaction: {}", e))
+        })?;
+
         // Optimize database after cleanup if significant deletions occurred
         if total_deleted > 100 {
-            conn.execute("PRAGMA optimize", [])
-                .map_err(|e| NonceError::DatabaseError(format!("Failed to optimize database: {}", e)))?;
+            conn.execute("PRAGMA optimize", []).map_err(|e| {
+                NonceError::DatabaseError(format!("Failed to optimize database: {}", e))
+            })?;
         }
-        
+
         Ok(total_deleted)
     }
-    
+
     /// Batch insert multiple nonces in a single transaction.
     ///
     /// This method is more efficient than multiple individual inserts
@@ -430,44 +457,56 @@ impl Database {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[allow(dead_code)]
-    pub(crate) fn batch_insert_nonces(&self, nonces: Vec<(String, i64, Option<&str>)>) -> Result<(), NonceError> {
+    pub(crate) fn batch_insert_nonces(
+        &self,
+        nonces: Vec<(String, i64, Option<&str>)>,
+    ) -> Result<(), NonceError> {
         if nonces.is_empty() {
             return Ok(());
         }
-        
+
         let conn = self.connection.lock().unwrap();
-        
-        let tx = conn.unchecked_transaction()
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to start batch insert transaction: {}", e)))?;
-        
+
+        let tx = conn.unchecked_transaction().map_err(|e| {
+            NonceError::DatabaseError(format!("Failed to start batch insert transaction: {}", e))
+        })?;
+
         {
-            let mut stmt = tx.prepare(
-                "INSERT INTO nonce_record (nonce, created_at, context) VALUES (?, ?, ?)"
-            ).map_err(|e| NonceError::DatabaseError(format!("Failed to prepare batch insert statement: {}", e)))?;
-            
+            let mut stmt = tx
+                .prepare("INSERT INTO nonce_record (nonce, created_at, context) VALUES (?, ?, ?)")
+                .map_err(|e| {
+                    NonceError::DatabaseError(format!(
+                        "Failed to prepare batch insert statement: {}",
+                        e
+                    ))
+                })?;
+
             for (nonce, created_at, context) in nonces {
                 let context_value = context.unwrap_or("");
-                
+
                 let result = stmt.execute(params![nonce, created_at, context_value]);
-                
+
                 match result {
-                    Ok(_) => {},
-                    Err(rusqlite::Error::SqliteFailure(sqlite_err, _)) 
+                    Ok(_) => {}
+                    Err(rusqlite::Error::SqliteFailure(sqlite_err, _))
                         if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
-                        && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE => {
+                            && sqlite_err.extended_code
+                                == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+                    {
                         return Err(NonceError::DuplicateNonce);
-                    },
+                    }
                     Err(e) => return Err(NonceError::DatabaseError(e.to_string())),
                 }
             }
         }
-        
-        tx.commit()
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to commit batch insert transaction: {}", e)))?;
-        
+
+        tx.commit().map_err(|e| {
+            NonceError::DatabaseError(format!("Failed to commit batch insert transaction: {}", e))
+        })?;
+
         Ok(())
     }
-    
+
     /// Gets database statistics for monitoring and optimization.
     ///
     /// Returns information about database size, cache usage, and performance metrics.
@@ -479,30 +518,38 @@ impl Database {
     #[allow(dead_code)]
     pub(crate) fn get_stats(&self) -> Result<DatabaseStats, NonceError> {
         let conn = self.connection.lock().unwrap();
-        
+
         // Get table info
-        let mut stmt = conn.prepare("SELECT COUNT(*) FROM nonce_record")
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM nonce_record")
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        let total_records: i64 = stmt.query_row([], |row| row.get(0))
+        let total_records: i64 = stmt
+            .query_row([], |row| row.get(0))
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         // Get database size
-        let mut stmt = conn.prepare("PRAGMA page_count")
+        let mut stmt = conn
+            .prepare("PRAGMA page_count")
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        let page_count: i64 = stmt.query_row([], |row| row.get(0))
+        let page_count: i64 = stmt
+            .query_row([], |row| row.get(0))
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
-        let mut stmt = conn.prepare("PRAGMA page_size")
+
+        let mut stmt = conn
+            .prepare("PRAGMA page_size")
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        let page_size: i64 = stmt.query_row([], |row| row.get(0))
+        let page_size: i64 = stmt
+            .query_row([], |row| row.get(0))
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         // Get cache stats
-        let mut stmt = conn.prepare("PRAGMA cache_size")
+        let mut stmt = conn
+            .prepare("PRAGMA cache_size")
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        let cache_size: i64 = stmt.query_row([], |row| row.get(0))
+        let cache_size: i64 = stmt
+            .query_row([], |row| row.get(0))
             .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
-        
+
         Ok(DatabaseStats {
             total_records: total_records as usize,
             database_size_bytes: (page_count * page_size) as usize,
@@ -529,7 +576,7 @@ pub(crate) struct DatabaseStats {
 // Global database instance management
 lazy_static::lazy_static! {
     /// Global database instance for the application.
-    /// 
+    ///
     /// This static instance ensures that all parts of the application
     /// use the same database connection and schema.
     static ref DATABASE: Mutex<Option<Database>> = Mutex::new(None);
@@ -562,7 +609,7 @@ lazy_static::lazy_static! {
 /// ```
 pub(crate) fn get_database() -> Result<Database, NonceError> {
     let mut db_guard = DATABASE.lock().unwrap();
-    
+
     if db_guard.is_none() {
         // Create configuration from environment variables (preset + overrides)
         let config = NonceConfig::from_env();
@@ -570,15 +617,13 @@ pub(crate) fn get_database() -> Result<Database, NonceError> {
         db.init_schema()?;
         *db_guard = Some(db);
     }
-    
+
     // Clone the database instance (Arc<Mutex<Connection>> is cheap to clone)
     Ok(Database {
         connection: db_guard.as_ref().unwrap().connection.clone(),
         config: db_guard.as_ref().unwrap().config.clone(),
     })
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -602,7 +647,7 @@ mod tests {
     #[test]
     fn test_schema_initialization() {
         let db = create_test_db();
-        
+
         // Test that we can initialize schema multiple times (idempotent)
         assert!(db.init_schema().is_ok());
         assert!(db.init_schema().is_ok());
@@ -656,16 +701,34 @@ mod tests {
 
         // Insert same nonce in different contexts - should all succeed
         assert!(db.insert_nonce("context-nonce", now, None).is_ok());
-        assert!(db.insert_nonce("context-nonce", now, Some("api_v1")).is_ok());
-        assert!(db.insert_nonce("context-nonce", now, Some("api_v2")).is_ok());
+        assert!(
+            db.insert_nonce("context-nonce", now, Some("api_v1"))
+                .is_ok()
+        );
+        assert!(
+            db.insert_nonce("context-nonce", now, Some("api_v2"))
+                .is_ok()
+        );
 
         // Check existence in each context
         assert!(db.nonce_exists("context-nonce", None).unwrap().is_some());
-        assert!(db.nonce_exists("context-nonce", Some("api_v1")).unwrap().is_some());
-        assert!(db.nonce_exists("context-nonce", Some("api_v2")).unwrap().is_some());
+        assert!(
+            db.nonce_exists("context-nonce", Some("api_v1"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            db.nonce_exists("context-nonce", Some("api_v2"))
+                .unwrap()
+                .is_some()
+        );
 
         // Check non-existence in different context
-        assert!(db.nonce_exists("context-nonce", Some("api_v3")).unwrap().is_none());
+        assert!(
+            db.nonce_exists("context-nonce", Some("api_v3"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -678,7 +741,7 @@ mod tests {
 
         // Insert old and new nonces
         let old_time = now - 3600; // 1 hour ago
-        let new_time = now - 60;   // 1 minute ago
+        let new_time = now - 60; // 1 minute ago
 
         assert!(db.insert_nonce("old-nonce", old_time, None).is_ok());
         assert!(db.insert_nonce("new-nonce", new_time, None).is_ok());
@@ -698,8 +761,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_access() {
-        use std::thread;
         use std::sync::Arc;
+        use std::thread;
 
         let db = Arc::new(create_test_db());
         let db1 = Arc::clone(&db);
@@ -786,4 +849,4 @@ mod tests {
             Err(e) => panic!("Unexpected error type: {:?}", e),
         }
     }
-} 
+}

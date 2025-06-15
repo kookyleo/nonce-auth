@@ -28,7 +28,9 @@ fn main() {
     println!("{}\n", config.summary());
 
     // 演示预设 + 环境变量覆盖
-    println!("4. 生产预设 + 自定义缓存 (NONCE_AUTH_PRESET=production + NONCE_AUTH_CACHE_SIZE=32768):");
+    println!(
+        "4. 生产预设 + 自定义缓存 (NONCE_AUTH_PRESET=production + NONCE_AUTH_CACHE_SIZE=32768):"
+    );
     unsafe {
         std::env::set_var("NONCE_AUTH_PRESET", "production");
         std::env::set_var("NONCE_AUTH_CACHE_SIZE", "32768");
@@ -49,10 +51,10 @@ fn main() {
     println!("1. 单独环境变量（最高优先级）");
     println!("2. 预设配置（由 NONCE_AUTH_PRESET 选择）");
     println!("3. 默认值（最低优先级）");
-    
+
     // 清理环境变量
     unsafe {
         std::env::remove_var("NONCE_AUTH_PRESET");
         std::env::remove_var("NONCE_AUTH_CACHE_SIZE");
     }
-} 
+}

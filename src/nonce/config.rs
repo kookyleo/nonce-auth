@@ -58,13 +58,13 @@ pub struct NonceConfig {
     pub sync_mode: String,
     /// Temporary storage: MEMORY, FILE
     pub temp_store: String,
-    
+
     // Performance configuration
     /// Batch size for cleanup operations
     pub cleanup_batch_size: usize,
     /// Threshold for triggering database optimization
     pub cleanup_optimize_threshold: usize,
-    
+
     // Security configuration
     /// Default time-to-live for nonce records
     pub default_ttl: Duration,
@@ -89,7 +89,7 @@ impl Default for NonceConfig {
                 .unwrap_or_else(|_| "NORMAL".to_string()),
             temp_store: std::env::var("NONCE_AUTH_TEMP_STORE")
                 .unwrap_or_else(|_| "MEMORY".to_string()),
-            
+
             // Performance defaults
             cleanup_batch_size: std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE")
                 .ok()
@@ -99,19 +99,19 @@ impl Default for NonceConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100),
-            
+
             // Security defaults
             default_ttl: Duration::from_secs(
                 std::env::var("NONCE_AUTH_DEFAULT_TTL")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(300)
+                    .unwrap_or(300),
             ),
             time_window: Duration::from_secs(
                 std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(60)
+                    .unwrap_or(60),
             ),
         }
     }
@@ -142,62 +142,62 @@ impl NonceConfig {
     /// ```
     pub fn from_env() -> Self {
         // Start with preset configuration based on NONCE_AUTH_PRESET
-        let preset = std::env::var("NONCE_AUTH_PRESET")
-            .unwrap_or_else(|_| "production".to_string());
-        
+        let preset =
+            std::env::var("NONCE_AUTH_PRESET").unwrap_or_else(|_| "production".to_string());
+
         let mut config = match preset.to_lowercase().as_str() {
             "development" => Self::development(),
             "high_performance" => Self::high_performance(),
             _ => Self::production(), // Default to production
         };
-        
+
         // Apply individual environment variable overrides
         if let Ok(db_path) = std::env::var("NONCE_AUTH_DB_PATH") {
             config.db_path = db_path;
         }
-        
+
         if let Ok(cache_size) = std::env::var("NONCE_AUTH_CACHE_SIZE") {
             if let Ok(size) = cache_size.parse() {
                 config.cache_size_kb = size;
             }
         }
-        
+
         if let Ok(wal_mode) = std::env::var("NONCE_AUTH_WAL_MODE") {
             config.wal_mode = wal_mode.to_lowercase() != "false";
         }
-        
+
         if let Ok(sync_mode) = std::env::var("NONCE_AUTH_SYNC_MODE") {
             config.sync_mode = sync_mode;
         }
-        
+
         if let Ok(temp_store) = std::env::var("NONCE_AUTH_TEMP_STORE") {
             config.temp_store = temp_store;
         }
-        
+
         if let Ok(batch_size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE") {
             if let Ok(size) = batch_size.parse() {
                 config.cleanup_batch_size = size;
             }
         }
-        
+
         if let Ok(threshold) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD") {
             if let Ok(thresh) = threshold.parse() {
                 config.cleanup_optimize_threshold = thresh;
             }
         }
-        
+
         if let Ok(ttl) = std::env::var("NONCE_AUTH_DEFAULT_TTL") {
             if let Ok(secs) = ttl.parse() {
                 config.default_ttl = Duration::from_secs(secs);
             }
         }
-        
+
         if let Ok(window) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW") {
             if let Ok(secs) = window.parse() {
                 config.time_window = Duration::from_secs(secs);
             }
         }
-        
+
         config
     }
 
@@ -223,49 +223,49 @@ impl NonceConfig {
         if let Ok(db_path) = std::env::var("NONCE_AUTH_DB_PATH") {
             self.db_path = db_path;
         }
-        
+
         if let Ok(cache_size) = std::env::var("NONCE_AUTH_CACHE_SIZE") {
             if let Ok(size) = cache_size.parse() {
                 self.cache_size_kb = size;
             }
         }
-        
+
         if let Ok(wal_mode) = std::env::var("NONCE_AUTH_WAL_MODE") {
             self.wal_mode = wal_mode.to_lowercase() != "false";
         }
-        
+
         if let Ok(sync_mode) = std::env::var("NONCE_AUTH_SYNC_MODE") {
             self.sync_mode = sync_mode;
         }
-        
+
         if let Ok(temp_store) = std::env::var("NONCE_AUTH_TEMP_STORE") {
             self.temp_store = temp_store;
         }
-        
+
         if let Ok(batch_size) = std::env::var("NONCE_AUTH_CLEANUP_BATCH_SIZE") {
             if let Ok(size) = batch_size.parse() {
                 self.cleanup_batch_size = size;
             }
         }
-        
+
         if let Ok(threshold) = std::env::var("NONCE_AUTH_CLEANUP_THRESHOLD") {
             if let Ok(thresh) = threshold.parse() {
                 self.cleanup_optimize_threshold = thresh;
             }
         }
-        
+
         if let Ok(ttl) = std::env::var("NONCE_AUTH_DEFAULT_TTL") {
             if let Ok(secs) = ttl.parse() {
                 self.default_ttl = Duration::from_secs(secs);
             }
         }
-        
+
         if let Ok(window) = std::env::var("NONCE_AUTH_DEFAULT_TIME_WINDOW") {
             if let Ok(secs) = window.parse() {
                 self.time_window = Duration::from_secs(secs);
             }
         }
-        
+
         self
     }
 
@@ -302,7 +302,7 @@ impl NonceConfig {
             time_window: Duration::from_secs(60),  // 1 minute
         }
     }
-    
+
     /// Creates a new configuration optimized for development and testing.
     ///
     /// This preset uses:
@@ -326,8 +326,8 @@ impl NonceConfig {
     pub fn development() -> Self {
         Self {
             db_path: ":memory:".to_string(),
-            cache_size_kb: 512, // 512KB cache
-            wal_mode: false, // Not needed for in-memory
+            cache_size_kb: 512,           // 512KB cache
+            wal_mode: false,              // Not needed for in-memory
             sync_mode: "OFF".to_string(), // Faster for development
             temp_store: "MEMORY".to_string(),
             cleanup_batch_size: 100,
@@ -336,7 +336,7 @@ impl NonceConfig {
             time_window: Duration::from_secs(300), // 5 minutes (relaxed)
         }
     }
-    
+
     /// Creates a new configuration optimized for high-performance scenarios.
     ///
     /// This preset maximizes performance with:
@@ -370,9 +370,7 @@ impl NonceConfig {
             time_window: Duration::from_secs(60),
         }
     }
-    
 
-    
     /// Validates the configuration and returns any issues found.
     ///
     /// This method checks for common configuration problems and
@@ -397,52 +395,69 @@ impl NonceConfig {
     /// ```
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
-        
+
         // Validate cache size
         if self.cache_size_kb < 64 {
-            issues.push("Cache size is very small, consider increasing for better performance".to_string());
+            issues.push(
+                "Cache size is very small, consider increasing for better performance".to_string(),
+            );
         }
         if self.cache_size_kb > 32768 {
             issues.push("Cache size is very large, may consume excessive memory".to_string());
         }
-        
+
         // Validate sync mode
         if !["OFF", "NORMAL", "FULL"].contains(&self.sync_mode.as_str()) {
-            issues.push(format!("Invalid sync_mode '{}', must be OFF, NORMAL, or FULL", self.sync_mode));
+            issues.push(format!(
+                "Invalid sync_mode '{}', must be OFF, NORMAL, or FULL",
+                self.sync_mode
+            ));
         }
-        
+
         // Validate temp store
         if !["MEMORY", "FILE"].contains(&self.temp_store.as_str()) {
-            issues.push(format!("Invalid temp_store '{}', must be MEMORY or FILE", self.temp_store));
+            issues.push(format!(
+                "Invalid temp_store '{}', must be MEMORY or FILE",
+                self.temp_store
+            ));
         }
-        
+
         // Validate TTL
         if self.default_ttl.as_secs() < 30 {
-            issues.push("Default TTL is very short, may cause frequent cleanup overhead".to_string());
+            issues
+                .push("Default TTL is very short, may cause frequent cleanup overhead".to_string());
         }
         if self.default_ttl.as_secs() > 86400 {
             issues.push("Default TTL is very long, may cause database bloat".to_string());
         }
-        
+
         // Validate time window
         if self.time_window.as_secs() < 10 {
-            issues.push("Time window is very short, may cause legitimate requests to be rejected".to_string());
+            issues.push(
+                "Time window is very short, may cause legitimate requests to be rejected"
+                    .to_string(),
+            );
         }
         if self.time_window.as_secs() > 3600 {
-            issues.push("Time window is very long, may reduce security against replay attacks".to_string());
+            issues.push(
+                "Time window is very long, may reduce security against replay attacks".to_string(),
+            );
         }
-        
+
         // Validate batch sizes
         if self.cleanup_batch_size < 10 {
-            issues.push("Cleanup batch size is very small, may cause performance issues".to_string());
+            issues
+                .push("Cleanup batch size is very small, may cause performance issues".to_string());
         }
         if self.cleanup_batch_size > 10000 {
-            issues.push("Cleanup batch size is very large, may cause long-running transactions".to_string());
+            issues.push(
+                "Cleanup batch size is very large, may cause long-running transactions".to_string(),
+            );
         }
-        
+
         issues
     }
-    
+
     /// Returns a summary of the current configuration.
     ///
     /// This method provides a human-readable summary of all configuration
@@ -493,8 +508,8 @@ Security:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use serial_test::serial;
+    use std::env;
 
     /// Helper function to clear all nonce auth environment variables
     fn clear_env_vars() {
@@ -509,7 +524,7 @@ mod tests {
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
         ];
-        
+
         for var in &vars {
             unsafe {
                 env::remove_var(var);
@@ -531,28 +546,35 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         let config = NonceConfig::default();
-        
+
         // Test default values
         assert_eq!(config.db_path, "nonce_auth.db");
         assert_eq!(config.cache_size_kb, 2048);
-        assert_eq!(config.wal_mode, true);
+        assert!(config.wal_mode);
         assert_eq!(config.sync_mode, "NORMAL");
         assert_eq!(config.temp_store, "MEMORY");
         assert_eq!(config.cleanup_batch_size, 1000);
         assert_eq!(config.cleanup_optimize_threshold, 100);
         assert_eq!(config.default_ttl, Duration::from_secs(300));
         assert_eq!(config.time_window, Duration::from_secs(60));
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -571,10 +593,13 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         // Set environment variables
         unsafe {
             env::set_var("NONCE_AUTH_DB_PATH", "test.db");
@@ -587,25 +612,29 @@ mod tests {
             env::set_var("NONCE_AUTH_DEFAULT_TTL", "600");
             env::set_var("NONCE_AUTH_DEFAULT_TIME_WINDOW", "120");
         }
-        
+
         let config = NonceConfig::default();
-        
+
         // Test environment variable overrides
         assert_eq!(config.db_path, "test.db");
         assert_eq!(config.cache_size_kb, 4096);
-        assert_eq!(config.wal_mode, false);
+        assert!(!config.wal_mode);
         assert_eq!(config.sync_mode, "FULL");
         assert_eq!(config.temp_store, "FILE");
         assert_eq!(config.cleanup_batch_size, 2000);
         assert_eq!(config.cleanup_optimize_threshold, 200);
         assert_eq!(config.default_ttl, Duration::from_secs(600));
         assert_eq!(config.time_window, Duration::from_secs(120));
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -624,10 +653,13 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         // Test various WAL mode values
         let test_cases = [
             ("true", true),
@@ -640,20 +672,28 @@ mod tests {
             ("1", true),
             ("", true),
         ];
-        
+
         for (env_value, expected) in &test_cases {
             unsafe {
                 env::set_var("NONCE_AUTH_WAL_MODE", env_value);
             }
             let config = NonceConfig::default();
-            assert_eq!(config.wal_mode, *expected, "Failed for WAL_MODE='{}'", env_value);
+            assert_eq!(
+                config.wal_mode, *expected,
+                "Failed for WAL_MODE='{}'",
+                env_value
+            );
         }
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -672,10 +712,13 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         // Test invalid numeric values fall back to defaults
         unsafe {
             env::set_var("NONCE_AUTH_CACHE_SIZE", "invalid");
@@ -684,21 +727,25 @@ mod tests {
             env::set_var("NONCE_AUTH_DEFAULT_TTL", "abc");
             env::set_var("NONCE_AUTH_DEFAULT_TIME_WINDOW", "-1");
         }
-        
+
         let config = NonceConfig::default();
-        
+
         // Should fall back to defaults
         assert_eq!(config.cache_size_kb, 2048);
         assert_eq!(config.cleanup_batch_size, 1000);
         assert_eq!(config.cleanup_optimize_threshold, 100);
         assert_eq!(config.default_ttl, Duration::from_secs(300));
         assert_eq!(config.time_window, Duration::from_secs(60));
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -706,9 +753,9 @@ mod tests {
     #[test]
     fn test_production_preset() {
         let config = NonceConfig::production();
-        
+
         assert_eq!(config.cache_size_kb, 8192);
-        assert_eq!(config.wal_mode, true);
+        assert!(config.wal_mode);
         assert_eq!(config.sync_mode, "NORMAL");
         assert_eq!(config.temp_store, "MEMORY");
         assert_eq!(config.cleanup_batch_size, 2000);
@@ -720,10 +767,10 @@ mod tests {
     #[test]
     fn test_development_preset() {
         let config = NonceConfig::development();
-        
+
         assert_eq!(config.db_path, ":memory:");
         assert_eq!(config.cache_size_kb, 512);
-        assert_eq!(config.wal_mode, false);
+        assert!(!config.wal_mode);
         assert_eq!(config.sync_mode, "OFF");
         assert_eq!(config.temp_store, "MEMORY");
         assert_eq!(config.cleanup_batch_size, 100);
@@ -735,9 +782,9 @@ mod tests {
     #[test]
     fn test_high_performance_preset() {
         let config = NonceConfig::high_performance();
-        
+
         assert_eq!(config.cache_size_kb, 16384);
-        assert_eq!(config.wal_mode, true);
+        assert!(config.wal_mode);
         assert_eq!(config.sync_mode, "NORMAL");
         assert_eq!(config.temp_store, "MEMORY");
         assert_eq!(config.cleanup_batch_size, 5000);
@@ -760,10 +807,13 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         // Set test environment variables
         unsafe {
             env::set_var("NONCE_AUTH_DB_PATH", "custom.db");
@@ -776,25 +826,29 @@ mod tests {
             env::set_var("NONCE_AUTH_DEFAULT_TTL", "120");
             env::set_var("NONCE_AUTH_DEFAULT_TIME_WINDOW", "30");
         }
-        
+
         let config = NonceConfig::from_env();
-        
+
         // Verify configuration was read from environment
         assert_eq!(config.db_path, "custom.db");
         assert_eq!(config.cache_size_kb, 1024);
-        assert_eq!(config.wal_mode, false);
+        assert!(!config.wal_mode);
         assert_eq!(config.sync_mode, "OFF");
         assert_eq!(config.temp_store, "FILE");
         assert_eq!(config.cleanup_batch_size, 500);
         assert_eq!(config.cleanup_optimize_threshold, 250);
         assert_eq!(config.default_ttl, Duration::from_secs(120));
         assert_eq!(config.time_window, Duration::from_secs(30));
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -814,15 +868,23 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Cache size is very small")));
-        
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Cache size is very small"))
+        );
+
         // Test very large cache size
         let config = NonceConfig {
             cache_size_kb: 50000,
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Cache size is very large")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Cache size is very large"))
+        );
     }
 
     #[test]
@@ -832,7 +894,11 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Invalid sync_mode")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Invalid sync_mode"))
+        );
     }
 
     #[test]
@@ -842,7 +908,11 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Invalid temp_store")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Invalid temp_store"))
+        );
     }
 
     #[test]
@@ -853,15 +923,23 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Default TTL is very short")));
-        
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Default TTL is very short"))
+        );
+
         // Test very long TTL
         let config = NonceConfig {
             default_ttl: Duration::from_secs(100000),
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Default TTL is very long")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Default TTL is very long"))
+        );
     }
 
     #[test]
@@ -872,15 +950,23 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Time window is very short")));
-        
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Time window is very short"))
+        );
+
         // Test very long time window
         let config = NonceConfig {
             time_window: Duration::from_secs(5000),
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Time window is very long")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Time window is very long"))
+        );
     }
 
     #[test]
@@ -891,22 +977,30 @@ mod tests {
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Cleanup batch size is very small")));
-        
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Cleanup batch size is very small"))
+        );
+
         // Test very large batch size
         let config = NonceConfig {
             cleanup_batch_size: 20000,
             ..NonceConfig::default()
         };
         let issues = config.validate();
-        assert!(issues.iter().any(|issue| issue.contains("Cleanup batch size is very large")));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Cleanup batch size is very large"))
+        );
     }
 
     #[test]
     fn test_summary_format() {
         let config = NonceConfig::default();
         let summary = config.summary();
-        
+
         // Check that summary contains key information
         assert!(summary.contains("Nonce Authentication Configuration"));
         assert!(summary.contains("Database:"));
@@ -922,12 +1016,12 @@ mod tests {
     #[test]
     fn test_config_clone_and_debug() {
         let config = NonceConfig::default();
-        
+
         // Test Clone trait
         let cloned_config = config.clone();
         assert_eq!(config.db_path, cloned_config.db_path);
         assert_eq!(config.cache_size_kb, cloned_config.cache_size_kb);
-        
+
         // Test Debug trait
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("NonceConfig"));
@@ -947,10 +1041,10 @@ mod tests {
             default_ttl: Duration::from_secs(600),
             time_window: Duration::from_secs(120),
         };
-        
+
         assert_eq!(config.db_path, "custom_path.db");
         assert_eq!(config.cache_size_kb, 4096);
-        assert_eq!(config.wal_mode, false);
+        assert!(!config.wal_mode);
         assert_eq!(config.sync_mode, "FULL");
         assert_eq!(config.temp_store, "FILE");
         assert_eq!(config.cleanup_batch_size, 1500);
@@ -973,40 +1067,47 @@ mod tests {
             "NONCE_AUTH_CLEANUP_THRESHOLD",
             "NONCE_AUTH_DEFAULT_TTL",
             "NONCE_AUTH_DEFAULT_TIME_WINDOW",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         clear_env_vars();
-        
+
         // Set environment variables that would affect Default::default()
         unsafe {
             env::set_var("NONCE_AUTH_DB_PATH", "env_override.db");
             env::set_var("NONCE_AUTH_CACHE_SIZE", "1024");
         }
-        
+
         // Preset configurations should NOT be affected by environment variables
         let production_config = NonceConfig::production();
         assert_eq!(production_config.db_path, "nonce_auth.db"); // Not env_override.db
         assert_eq!(production_config.cache_size_kb, 8192); // Not 1024
         assert_eq!(production_config.cleanup_batch_size, 2000);
-        
+
         let dev_config = NonceConfig::development();
         assert_eq!(dev_config.db_path, ":memory:"); // Not env_override.db
         assert_eq!(dev_config.cache_size_kb, 512); // Not 1024
-        
+
         let perf_config = NonceConfig::high_performance();
         assert_eq!(perf_config.db_path, "nonce_auth.db"); // Not env_override.db
         assert_eq!(perf_config.cache_size_kb, 16384); // Not 1024
-        
+
         // But from_env() should use environment variables
         let env_config = NonceConfig::from_env();
         assert_eq!(env_config.db_path, "env_override.db");
         assert_eq!(env_config.cache_size_kb, 1024);
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
@@ -1016,7 +1117,7 @@ mod tests {
     fn test_env_preset_selection() {
         // Save current environment
         let saved_env = env::var("NONCE_AUTH_PRESET").ok();
-        
+
         // Test production preset (default)
         unsafe {
             env::remove_var("NONCE_AUTH_PRESET");
@@ -1025,7 +1126,7 @@ mod tests {
         let prod_config = NonceConfig::production();
         assert_eq!(config.cache_size_kb, prod_config.cache_size_kb);
         assert_eq!(config.cleanup_batch_size, prod_config.cleanup_batch_size);
-        
+
         // Test development preset
         unsafe {
             env::set_var("NONCE_AUTH_PRESET", "development");
@@ -1034,7 +1135,7 @@ mod tests {
         let dev_config = NonceConfig::development();
         assert_eq!(config.cache_size_kb, dev_config.cache_size_kb);
         assert_eq!(config.db_path, dev_config.db_path);
-        
+
         // Test high_performance preset
         unsafe {
             env::set_var("NONCE_AUTH_PRESET", "high_performance");
@@ -1043,7 +1144,7 @@ mod tests {
         let hp_config = NonceConfig::high_performance();
         assert_eq!(config.cache_size_kb, hp_config.cache_size_kb);
         assert_eq!(config.cleanup_batch_size, hp_config.cleanup_batch_size);
-        
+
         // Test invalid preset defaults to production
         unsafe {
             env::set_var("NONCE_AUTH_PRESET", "invalid");
@@ -1051,11 +1152,15 @@ mod tests {
         let config = NonceConfig::from_env();
         let prod_config = NonceConfig::production();
         assert_eq!(config.cache_size_kb, prod_config.cache_size_kb);
-        
+
         // Restore environment
         match saved_env {
-            Some(val) => unsafe { env::set_var("NONCE_AUTH_PRESET", val); },
-            None => unsafe { env::remove_var("NONCE_AUTH_PRESET"); },
+            Some(val) => unsafe {
+                env::set_var("NONCE_AUTH_PRESET", val);
+            },
+            None => unsafe {
+                env::remove_var("NONCE_AUTH_PRESET");
+            },
         }
     }
 
@@ -1067,32 +1172,39 @@ mod tests {
             "NONCE_AUTH_PRESET",
             "NONCE_AUTH_CACHE_SIZE",
             "NONCE_AUTH_DB_PATH",
-        ].iter().map(|var| (*var, env::var(var).ok())).collect();
-        
+        ]
+        .iter()
+        .map(|var| (*var, env::var(var).ok()))
+        .collect();
+
         // Test that individual environment variables override preset values
         unsafe {
             env::set_var("NONCE_AUTH_PRESET", "production");
             env::set_var("NONCE_AUTH_CACHE_SIZE", "12345");
             env::set_var("NONCE_AUTH_DB_PATH", "custom_test.db");
         }
-        
+
         let config = NonceConfig::from_env();
         let prod_config = NonceConfig::production();
-        
+
         // Overridden values should be different from preset
         assert_eq!(config.cache_size_kb, 12345);
         assert_eq!(config.db_path, "custom_test.db");
-        
+
         // Non-overridden values should match preset
         assert_eq!(config.cleanup_batch_size, prod_config.cleanup_batch_size);
         assert_eq!(config.wal_mode, prod_config.wal_mode);
-        
+
         // Restore environment
         for (var, value) in saved_vars {
             match value {
-                Some(val) => unsafe { env::set_var(var, val); },
-                None => unsafe { env::remove_var(var); },
+                Some(val) => unsafe {
+                    env::set_var(var, val);
+                },
+                None => unsafe {
+                    env::remove_var(var);
+                },
             }
         }
     }
-} 
+}

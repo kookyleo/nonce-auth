@@ -111,7 +111,7 @@ use sha2::Sha256;
 pub mod nonce;
 
 // Re-export commonly used types
-pub use nonce::{NonceClient, NonceError, NonceServer, NonceConfig};
+pub use nonce::{NonceClient, NonceConfig, NonceError, NonceServer};
 
 /// Internal type alias for HMAC-SHA256 operations.
 type HmacSha256 = Hmac<Sha256>;
