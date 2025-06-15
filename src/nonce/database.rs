@@ -115,37 +115,37 @@ impl Database {
 
         // Set cache size (negative value means KB, positive means pages)
         conn.pragma_update(None, "cache_size", -self.config.cache_size_kb)
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to set cache_size: {}", e)))?;
+            .map_err(|e| NonceError::DatabaseError(format!("Failed to set cache_size: {e}")))?;
 
         // Enable WAL mode for better concurrency (only for file databases)
         if self.config.wal_mode && self.config.db_path != ":memory:" {
             conn.pragma_update(None, "journal_mode", "WAL")
                 .map_err(|e| {
-                    NonceError::DatabaseError(format!("Failed to enable WAL mode: {}", e))
+                    NonceError::DatabaseError(format!("Failed to enable WAL mode: {e}"))
                 })?;
         }
 
         // Set synchronous mode
         conn.pragma_update(None, "synchronous", &self.config.sync_mode)
             .map_err(|e| {
-                NonceError::DatabaseError(format!("Failed to set synchronous mode: {}", e))
+                NonceError::DatabaseError(format!("Failed to set synchronous mode: {e}"))
             })?;
 
         // Set temporary storage mode
         conn.pragma_update(None, "temp_store", &self.config.temp_store)
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to set temp_store: {}", e)))?;
+            .map_err(|e| NonceError::DatabaseError(format!("Failed to set temp_store: {e}")))?;
 
         // Enable foreign key constraints
         conn.pragma_update(None, "foreign_keys", true)
             .map_err(|e| {
-                NonceError::DatabaseError(format!("Failed to enable foreign keys: {}", e))
+                NonceError::DatabaseError(format!("Failed to enable foreign keys: {e}"))
             })?;
 
         // Optimize for faster writes (trade-off with durability)
         if self.config.wal_mode && self.config.sync_mode == "NORMAL" {
             conn.pragma_update(None, "wal_autocheckpoint", 1000)
                 .map_err(|e| {
-                    NonceError::DatabaseError(format!("Failed to set WAL autocheckpoint: {}", e))
+                    NonceError::DatabaseError(format!("Failed to set WAL autocheckpoint: {e}"))
                 })?;
         }
 
@@ -219,7 +219,7 @@ impl Database {
 
         // Analyze tables for query optimizer
         conn.execute("ANALYZE", [])
-            .map_err(|e| NonceError::DatabaseError(format!("Failed to analyze tables: {}", e)))?;
+            .map_err(|e| NonceError::DatabaseError(format!("Failed to analyze tables: {e}")))?;
 
         Ok(())
     }
@@ -380,9 +380,9 @@ impl Database {
         let conn = self.connection.lock().unwrap();
 
         // Use a transaction for better performance and consistency
-        let tx = conn.unchecked_transaction().map_err(|e| {
-            NonceError::DatabaseError(format!("Failed to start transaction: {}", e))
-        })?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| NonceError::DatabaseError(format!("Failed to start transaction: {e}")))?;
 
         // Delete in batches to avoid long-running transactions
         let batch_size = self.config.cleanup_batch_size;
@@ -409,13 +409,13 @@ impl Database {
         }
 
         tx.commit().map_err(|e| {
-            NonceError::DatabaseError(format!("Failed to commit cleanup transaction: {}", e))
+            NonceError::DatabaseError(format!("Failed to commit cleanup transaction: {e}"))
         })?;
 
         // Optimize database after cleanup if significant deletions occurred
         if total_deleted > 100 {
             conn.execute("PRAGMA optimize", []).map_err(|e| {
-                NonceError::DatabaseError(format!("Failed to optimize database: {}", e))
+                NonceError::DatabaseError(format!("Failed to optimize database: {e}"))
             })?;
         }
 
@@ -468,7 +468,7 @@ impl Database {
         let conn = self.connection.lock().unwrap();
 
         let tx = conn.unchecked_transaction().map_err(|e| {
-            NonceError::DatabaseError(format!("Failed to start batch insert transaction: {}", e))
+            NonceError::DatabaseError(format!("Failed to start batch insert transaction: {e}"))
         })?;
 
         {
@@ -476,8 +476,7 @@ impl Database {
                 .prepare("INSERT INTO nonce_record (nonce, created_at, context) VALUES (?, ?, ?)")
                 .map_err(|e| {
                     NonceError::DatabaseError(format!(
-                        "Failed to prepare batch insert statement: {}",
-                        e
+                        "Failed to prepare batch insert statement: {e}"
                     ))
                 })?;
 
@@ -501,7 +500,7 @@ impl Database {
         }
 
         tx.commit().map_err(|e| {
-            NonceError::DatabaseError(format!("Failed to commit batch insert transaction: {}", e))
+            NonceError::DatabaseError(format!("Failed to commit batch insert transaction: {e}"))
         })?;
 
         Ok(())
@@ -770,7 +769,7 @@ mod tests {
 
         let handle1 = thread::spawn(move || {
             for i in 0..10 {
-                let nonce = format!("thread1-nonce-{}", i);
+                let nonce = format!("thread1-nonce-{i}");
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -781,7 +780,7 @@ mod tests {
 
         let handle2 = thread::spawn(move || {
             for i in 0..10 {
-                let nonce = format!("thread2-nonce-{}", i);
+                let nonce = format!("thread2-nonce-{i}");
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -796,8 +795,8 @@ mod tests {
 
         // Verify that all nonces were inserted
         for i in 0..10 {
-            let nonce1 = format!("thread1-nonce-{}", i);
-            let nonce2 = format!("thread2-nonce-{}", i);
+            let nonce1 = format!("thread1-nonce-{i}");
+            let nonce2 = format!("thread2-nonce-{i}");
             assert!(db.nonce_exists(&nonce1, Some("thread1")).unwrap().is_some());
             assert!(db.nonce_exists(&nonce2, Some("thread2")).unwrap().is_some());
         }
