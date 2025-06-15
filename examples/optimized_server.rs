@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
             mac.update(timestamp.as_bytes());
             mac.update(nonce.as_bytes());
-            mac.update(format!("request_{}", i).as_bytes());
+            mac.update(format!("request_{i}").as_bytes());
         })?;
 
         // Verify protection data
@@ -52,12 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
                 mac.update(protection_data.timestamp.to_string().as_bytes());
                 mac.update(protection_data.nonce.as_bytes());
-                mac.update(format!("request_{}", i).as_bytes());
+                mac.update(format!("request_{i}").as_bytes());
             })
             .await
         {
             Ok(()) => successful_auths += 1,
-            Err(e) => println!("Authentication failed for request {}: {}", i, e),
+            Err(e) => println!("Authentication failed for request {i}: {e}"),
         }
 
         // Simulate some processing time
@@ -67,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let duration = start.elapsed();
-    println!("✓ Processed 100 authentication requests in {:?}", duration);
-    println!("✓ Successful authentications: {}/100\n", successful_auths);
+    println!("✓ Processed 100 authentication requests in {duration:?}");
+    println!("✓ Successful authentications: {successful_auths}/100\n");
 
     // 5. Demonstrate cleanup performance
     println!("Testing cleanup performance...");
@@ -76,10 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deleted_count = NonceServer::cleanup_expired_nonces(Duration::from_secs(1)).await?;
     let cleanup_duration = cleanup_start.elapsed();
 
-    println!(
-        "✓ Cleaned up {} expired nonces in {:?}\n",
-        deleted_count, cleanup_duration
-    );
+    println!("✓ Cleaned up {deleted_count} expired nonces in {cleanup_duration:?}\n");
 
     // 6. Test different configuration presets
     println!("=== Configuration Presets ===\n");
@@ -106,11 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, config) in configs {
         let issues = config.validate();
         if issues.is_empty() {
-            println!("✓ {} configuration is valid", name);
+            println!("✓ {name} configuration is valid");
         } else {
-            println!("⚠ {} configuration has issues:", name);
+            println!("⚠ {name} configuration has issues:");
             for issue in issues {
-                println!("  - {}", issue);
+                println!("  - {issue}");
             }
         }
     }

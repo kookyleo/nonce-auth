@@ -845,7 +845,7 @@ mod tests {
             Err(NonceError::DatabaseError(_)) => {
                 // Expected error for invalid path
             }
-            Err(e) => panic!("Unexpected error type: {:?}", e),
+            Err(e) => panic!("Unexpected error type: {e:?}"),
         }
     }
 }

@@ -690,8 +690,7 @@ mod tests {
             let config = NonceConfig::default();
             assert_eq!(
                 config.wal_mode, *expected,
-                "Failed for WAL_MODE='{}'",
-                env_value
+                "Failed for WAL_MODE='{env_value}'"
             );
         }
 
@@ -1033,7 +1032,7 @@ mod tests {
         assert_eq!(config.cache_size_kb, cloned_config.cache_size_kb);
 
         // Test Debug trait
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         assert!(debug_str.contains("NonceConfig"));
         assert!(debug_str.contains("db_path"));
     }
