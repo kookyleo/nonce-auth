@@ -1,13 +1,13 @@
 [package]
 name = "nonce-auth"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 authors = ["Leo <kookyleo@gmail.com>"]
 repository = "https://github.com/kookyleo/nonce-auth"
 homepage = "https://github.com/kookyleo/nonce-auth"
 documentation = "https://docs.rs/nonce-auth"
 license = "MIT OR Apache-2.0"
-description = "A secure nonce-based authentication library for preventing replay attacks"
+description = "A secure nonce-based authentication library with pluggable storage backends"
 keywords = ["nonce", "auth", "authentication", "security", "replay-attack"]
 categories = ["authentication", "cryptography", "web-programming"]
 readme = "README.md"
@@ -18,7 +18,6 @@ exclude = [
 ]
 
 [dependencies]
-rusqlite = { version = "0.35", features = ["bundled"] }
 lazy_static = "1.4"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -30,11 +29,13 @@ serde_json = "1.0"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+async-trait = "0.1"
 
 [dev-dependencies]
 warp = "0.3"
 rand = "0.8"
 serial_test = "3.0"
+rusqlite = { version = "0.35", features = ["bundled"] }
 
 [package.metadata.docs.rs]
 all-features = true

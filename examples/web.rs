@@ -1,5 +1,5 @@
 use hmac::Mac;
-use nonce_auth::NonceServer;
+use nonce_auth::{NonceServer, storage::MemoryStorage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -279,10 +279,7 @@ type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
 
 #[tokio::main]
 async fn main() {
-    // Initialize the nonce server database
-    NonceServer::init()
-        .await
-        .expect("Failed to initialize database");
+    // Storage will be created per request to keep web example simple
 
     // Create PSK store
     let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -362,12 +359,17 @@ async fn handle_protected_request(
         }
     };
 
-    // Create server with PSK
+    // Create storage and server with PSK
+    let storage = Arc::new(MemoryStorage::new());
     let server = NonceServer::new(
         psk.as_bytes(),
+        storage,
         Some(Duration::from_secs(60)), // 1 minute TTL
         Some(Duration::from_secs(15)), // 15 seconds time window
     );
+
+    // Initialize storage
+    server.init().await.expect("Failed to initialize storage");
 
     // Verify the request with custom signature including payload
     match server

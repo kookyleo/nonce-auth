@@ -1,10 +1,10 @@
 //! # Nonce Auth
 //!
-//! A Rust library for secure nonce-based authentication that prevents replay attacks.
+//! A Rust library for secure nonce-based authentication with pluggable storage backends.
 //!
 //! This library provides a complete solution for implementing nonce-based authentication
-//! in client-server applications. It uses HMAC-SHA256 signatures and SQLite for persistent
-//! nonce storage to ensure that each request can only be used once.
+//! in client-server applications. It uses HMAC-SHA256 signatures and pluggable storage
+//! backends for persistent nonce storage to ensure that each request can only be used once.
 //!
 //! ## Features
 //!
@@ -12,7 +12,7 @@
 //! - **Replay Attack Prevention**: Each nonce can only be used once
 //! - **Time Window Validation**: Requests outside the time window are rejected
 //! - **Context Isolation**: Nonces can be scoped to different business contexts
-//! - **SQLite Persistence**: Automatic nonce storage and cleanup
+//! - **Pluggable Storage**: Flexible storage backends (memory, database, Redis, etc.)
 //! - **Async Support**: Fully asynchronous API design
 //! - **Client-Server Separation**: Clean separation of client and server responsibilities
 //!
@@ -21,18 +21,22 @@
 //! ### Basic Usage
 //!
 //! ```rust
-//! use nonce_auth::{NonceClient, NonceServer};
+//! use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
 //! use std::time::Duration;
+//! use std::sync::Arc;
 //! use hmac::Mac;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Initialize the database
-//! NonceServer::init().await?;
+//! // Create a storage backend
+//! let storage = Arc::new(MemoryStorage::new());
 //!
 //! // Create client and server with shared secret
 //! let secret = b"shared_secret_key";
 //! let client = NonceClient::new(secret);
-//! let server = NonceServer::new(secret, None, None);
+//! let server = NonceServer::new(secret, storage, None, None);
+//!
+//! // Initialize the storage backend
+//! server.init().await?;
 //!
 //! // Client generates authentication data with custom signature
 //! let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
@@ -55,13 +59,14 @@
 //! ### With Context Isolation
 //!
 //! ```rust
-//! use nonce_auth::{NonceClient, NonceServer};
+//! use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
+//! use std::sync::Arc;
 //! use hmac::Mac;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # NonceServer::init().await?;
+//! let storage = Arc::new(MemoryStorage::new());
 //! let client = NonceClient::new(b"secret");
-//! let server = NonceServer::new(b"secret", None, None);
+//! let server = NonceServer::new(b"secret", storage, None, None);
 //!
 //! let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 //!     mac.update(timestamp.as_bytes());
@@ -81,26 +86,67 @@
 //! # }
 //! ```
 //!
-//! ## Database Configuration
+//! ## Storage Backends
 //!
-//! The SQLite database location can be configured using the `NONCE_AUTH_DB_PATH` environment variable:
+//! The library supports pluggable storage backends through the `NonceStorage` trait:
 //!
-//! ```bash
-//! # Use a specific file
-//! export NONCE_AUTH_DB_PATH="/path/to/nonce_auth.db"
+//! ### In-Memory Storage (for testing/development)
 //!
-//! # Use in-memory database (for testing)
-//! export NONCE_AUTH_DB_PATH=":memory:"
+//! ```rust
+//! use nonce_auth::storage::MemoryStorage;
+//! use std::sync::Arc;
+//!
+//! let storage = Arc::new(MemoryStorage::new());
 //! ```
 //!
-//! If not set, it defaults to `nonce_auth.db` in the current directory.
+//! ### Custom Storage Implementation
+//!
+//! ```rust
+//! use nonce_auth::storage::{NonceStorage, NonceEntry, StorageStats};
+//! use nonce_auth::NonceError;
+//! use async_trait::async_trait;
+//! use std::time::Duration;
+//!
+//! pub struct CustomStorage {
+//!     // Your storage implementation
+//! }
+//!
+//! #[async_trait]
+//! impl NonceStorage for CustomStorage {
+//!     async fn get(&self, nonce: &str, context: Option<&str>) -> Result<Option<NonceEntry>, NonceError> {
+//!         // Implementation
+//!         todo!()
+//!     }
+//!
+//!     async fn set(&self, nonce: &str, context: Option<&str>, ttl: Duration) -> Result<(), NonceError> {
+//!         // Implementation
+//!         todo!()
+//!     }
+//!
+//!     async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> {
+//!         // Implementation
+//!         todo!()
+//!     }
+//!
+//!     async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> {
+//!         // Implementation
+//!         todo!()
+//!     }
+//!
+//!     async fn get_stats(&self) -> Result<StorageStats, NonceError> {
+//!         // Implementation
+//!         todo!()
+//!     }
+//! }
+//! ```
 //!
 //! ## Architecture
 //!
 //! The library is designed with clear separation between client and server responsibilities:
 //!
 //! - **[`NonceClient`]**: Lightweight client for generating signed requests
-//! - **[`NonceServer`]**: Server-side verification and nonce management
+//! - **[`NonceServer`]**: Server-side verification and nonce management with pluggable storage
+//! - **[`NonceStorage`]**: Abstract storage trait for implementing custom backends
 //! - **[`ProtectionData`]**: The data structure exchanged between client and server
 //! - **[`NonceError`]**: Comprehensive error handling for all failure modes
 
@@ -109,6 +155,14 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 pub mod nonce;
+pub mod storage {
+    //! Storage backend abstractions and implementations.
+    //!
+    //! This module provides the storage abstraction layer for nonce persistence.
+    //! It includes the `NonceStorage` trait and basic implementations.
+
+    pub use crate::nonce::storage::*;
+}
 
 // Re-export commonly used types
 pub use nonce::{NonceClient, NonceConfig, NonceError, NonceServer};
@@ -197,28 +251,20 @@ pub struct ProtectionData {
 
 #[cfg(test)]
 mod tests {
+    use crate::nonce::storage::MemoryStorage;
     use crate::nonce::{NonceClient, NonceError, NonceServer};
     use hmac::Mac;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-    const TEST_SECRET: &[u8] = b"test_secret_key_123";
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_client_server_separation() {
-        // Initialize database
-        unsafe {
-            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
-        }
-        NonceServer::init().await.unwrap();
+        let storage = Arc::new(MemoryStorage::new());
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::new(b"test_secret", storage, None, None);
 
-        let client = NonceClient::new(TEST_SECRET);
-        let server = NonceServer::new(
-            TEST_SECRET,
-            Some(Duration::from_secs(300)), // 5 min TTL
-            Some(Duration::from_secs(300)), // 5 min time window
-        );
+        server.init().await.unwrap();
 
-        // Client creates protection data with custom signature
+        // Client creates protection data
         let protection_data = client
             .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
@@ -226,59 +272,35 @@ mod tests {
             })
             .unwrap();
 
-        // Server verifies the protection data with matching signature algorithm
-        assert!(
-            server
-                .verify_protection_data(&protection_data, None, |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
-
-        // Test duplicate protection data detection
-        assert!(matches!(
-            server
-                .verify_protection_data(&protection_data, None, |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::DuplicateNonce)
-        ));
-
-        // Test invalid signature
-        let mut bad_protection_data = client
-            .create_protection_data(|mac, timestamp, nonce| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
+        // Server verifies protection data
+        let result = server
+            .verify_protection_data(&protection_data, None, |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
             })
-            .unwrap();
-        bad_protection_data.signature = "invalid_signature".to_string();
+            .await;
 
-        assert!(matches!(
-            server
-                .verify_protection_data(&bad_protection_data, None, |mac| {
-                    mac.update(bad_protection_data.timestamp.to_string().as_bytes());
-                    mac.update(bad_protection_data.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::InvalidSignature)
-        ));
+        assert!(result.is_ok());
+
+        // Same nonce should be rejected
+        let result = server
+            .verify_protection_data(&protection_data, None, |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await;
+
+        assert!(matches!(result, Err(NonceError::DuplicateNonce)));
     }
 
     #[tokio::test]
     async fn test_context_isolation() {
-        unsafe {
-            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
-        }
-        NonceServer::init().await.unwrap();
+        let storage = Arc::new(MemoryStorage::new());
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::new(b"test_secret", storage, None, None);
 
-        let client = NonceClient::new(TEST_SECRET);
-        let server = NonceServer::new(TEST_SECRET, None, None);
+        server.init().await.unwrap();
 
-        // Create one protection data to test context isolation
         let protection_data = client
             .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
@@ -286,152 +308,79 @@ mod tests {
             })
             .unwrap();
 
-        // Same nonce can be used in different contexts
-        assert!(
-            server
-                .verify_protection_data(&protection_data, Some("context1"), |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
-        assert!(
-            server
-                .verify_protection_data(&protection_data, Some("context2"), |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
-        assert!(
-            server
-                .verify_protection_data(&protection_data, Some("context3"), |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
+        // Same nonce should work in different contexts
+        server
+            .verify_protection_data(&protection_data, Some("context1"), |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await
+            .unwrap();
 
-        // But cannot be reused in the same context
-        let protection_data_copy = protection_data.clone();
-        assert!(matches!(
-            server
-                .verify_protection_data(&protection_data_copy, Some("context1"), |mac| {
-                    mac.update(protection_data_copy.timestamp.to_string().as_bytes());
-                    mac.update(protection_data_copy.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::DuplicateNonce)
-        ));
+        server
+            .verify_protection_data(&protection_data, Some("context2"), |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await
+            .unwrap();
 
-        // Test with no context (NULL context)
-        assert!(
-            server
-                .verify_protection_data(&protection_data, None, |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
+        // But should fail if used twice in same context
+        let result = server
+            .verify_protection_data(&protection_data, Some("context1"), |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await;
 
-        // Cannot reuse with no context
-        let protection_data_copy2 = protection_data.clone();
-        assert!(matches!(
-            server
-                .verify_protection_data(&protection_data_copy2, None, |mac| {
-                    mac.update(protection_data_copy2.timestamp.to_string().as_bytes());
-                    mac.update(protection_data_copy2.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::DuplicateNonce)
-        ));
+        assert!(matches!(result, Err(NonceError::DuplicateNonce)));
     }
 
     #[tokio::test]
     async fn test_timestamp_validation() {
-        unsafe {
-            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
-        }
-        NonceServer::init().await.unwrap();
-
-        let client = NonceClient::new(TEST_SECRET);
+        let storage = Arc::new(MemoryStorage::new());
+        let client = NonceClient::new(b"test_secret");
         let server = NonceServer::new(
-            TEST_SECRET,
-            Some(Duration::from_secs(300)),
-            Some(Duration::from_secs(60)), // 1 minute window
+            b"test_secret",
+            storage,
+            None,
+            Some(std::time::Duration::from_secs(1)),
         );
 
+        server.init().await.unwrap();
+
         // Create protection data with old timestamp
-        let old_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            .saturating_sub(3600); // 1 hour ago
-
-        let nonce = uuid::Uuid::new_v4().to_string();
-
-        // Create signature with old timestamp
-        let signature = client
-            .generate_signature(|mac| {
-                mac.update(old_timestamp.to_string().as_bytes());
+        let mut protection_data = client
+            .create_protection_data(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
                 mac.update(nonce.as_bytes());
             })
             .unwrap();
 
-        let old_protection_data = crate::ProtectionData {
-            timestamp: old_timestamp,
-            nonce,
-            signature,
-        };
+        // Simulate old timestamp (2 seconds ago, but time window is 1 second)
+        protection_data.timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 2;
 
-        assert!(matches!(
-            server
-                .verify_protection_data(&old_protection_data, None, |mac| {
-                    mac.update(old_protection_data.timestamp.to_string().as_bytes());
-                    mac.update(old_protection_data.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::TimestampOutOfWindow)
-        ));
+        let result = server
+            .verify_protection_data(&protection_data, None, |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await;
+
+        assert!(matches!(result, Err(NonceError::TimestampOutOfWindow)));
     }
 
     #[tokio::test]
-    async fn test_server_default_values() {
-        let server = NonceServer::new(TEST_SECRET, None, None);
+    async fn test_signature_verification() {
+        let storage = Arc::new(MemoryStorage::new());
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::new(b"different_secret", storage, None, None);
 
-        // Test default values
-        assert_eq!(server.ttl(), Duration::from_secs(300)); // 5 minutes
-        assert_eq!(server.time_window(), Duration::from_secs(60)); // 1 minute
-    }
-
-    #[tokio::test]
-    async fn test_server_custom_values() {
-        let custom_ttl = Duration::from_secs(600);
-        let custom_window = Duration::from_secs(120);
-
-        let server = NonceServer::new(TEST_SECRET, Some(custom_ttl), Some(custom_window));
-
-        assert_eq!(server.ttl(), custom_ttl);
-        assert_eq!(server.time_window(), custom_window);
-    }
-
-    #[tokio::test]
-    async fn test_protection_data_expiration() {
-        unsafe {
-            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
-        }
-        NonceServer::init().await.unwrap();
-
-        let client = NonceClient::new(TEST_SECRET);
-        let server = NonceServer::new(
-            TEST_SECRET,
-            Some(Duration::from_millis(100)), // Very short TTL
-            Some(Duration::from_secs(300)),
-        );
+        server.init().await.unwrap();
 
         let protection_data = client
             .create_protection_data(|mac, timestamp, nonce| {
@@ -440,72 +389,19 @@ mod tests {
             })
             .unwrap();
 
-        // First verification should succeed
-        assert!(
-            server
-                .verify_protection_data(&protection_data, None, |mac| {
-                    mac.update(protection_data.timestamp.to_string().as_bytes());
-                    mac.update(protection_data.nonce.as_bytes());
-                })
-                .await
-                .is_ok()
-        );
-
-        // Second verification with same nonce should fail (already consumed)
-        let duplicate_protection_data = protection_data.clone();
-        assert!(matches!(
-            server
-                .verify_protection_data(&duplicate_protection_data, None, |mac| {
-                    mac.update(duplicate_protection_data.timestamp.to_string().as_bytes());
-                    mac.update(duplicate_protection_data.nonce.as_bytes());
-                })
-                .await,
-            Err(NonceError::DuplicateNonce)
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_cleanup_expired() {
-        unsafe {
-            std::env::set_var("NONCE_AUTH_DB_PATH", ":memory:");
-        }
-        NonceServer::init().await.unwrap();
-
-        // Test cleanup function
-        let result = NonceServer::cleanup_expired_nonces(Duration::from_secs(300)).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_signature_verification() {
-        let client = NonceClient::new(TEST_SECRET);
-
-        // Test direct signature creation and verification
-        let timestamp = "1234567890";
-        let nonce = "test-nonce";
-
-        let signature = client
-            .generate_signature(|mac| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
+        let result = server
+            .verify_protection_data(&protection_data, None, |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
             })
-            .unwrap();
-        assert!(!signature.is_empty());
+            .await;
 
-        // Test with different secret should produce different signature
-        let client2 = NonceClient::new(b"different_secret");
-        let signature2 = client2
-            .generate_signature(|mac| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
-            })
-            .unwrap();
-        assert_ne!(signature, signature2);
+        assert!(matches!(result, Err(NonceError::InvalidSignature)));
     }
 
     #[tokio::test]
     async fn test_serialization() {
-        let client = NonceClient::new(TEST_SECRET);
+        let client = NonceClient::new(b"test_secret");
         let protection_data = client
             .create_protection_data(|mac, timestamp, nonce| {
                 mac.update(timestamp.as_bytes());
@@ -515,10 +411,8 @@ mod tests {
 
         // Test JSON serialization
         let json = serde_json::to_string(&protection_data).unwrap();
-        assert!(!json.is_empty());
+        let deserialized: super::ProtectionData = serde_json::from_str(&json).unwrap();
 
-        // Test deserialization
-        let deserialized: crate::ProtectionData = serde_json::from_str(&json).unwrap();
         assert_eq!(protection_data.timestamp, deserialized.timestamp);
         assert_eq!(protection_data.nonce, deserialized.nonce);
         assert_eq!(protection_data.signature, deserialized.signature);

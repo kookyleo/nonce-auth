@@ -13,7 +13,7 @@
 - 🔐 **HMAC-SHA256 签名** - 使用共享密钥对请求进行加密签名
 - ⏰ **时间窗口验证** - 防止过期请求的重放攻击
 - 🔑 **一次性 Nonce** - 确保每个 nonce 只能使用一次
-- 💾 **SQLite 持久化** - 自动管理 nonce 的存储和清理
+- 💾 **可插拔存储** - 支持内存、SQLite、Redis 或自定义存储后端
 - 🎯 **上下文隔离** - 支持不同业务场景的 nonce 隔离
 - 🚀 **异步支持** - 完全异步的 API 设计
 - 🛡️ **安全防护** - 常量时间比较防止时序攻击
@@ -34,7 +34,7 @@
 
 #### `NonceServer` - 服务端管理器  
 - 负责验证签名认证数据
-- 管理 nonce 存储和清理
+- 通过可插拔后端管理 nonce 存储和清理
 - 包含时间戳验证和防重放攻击机制
 - 支持不同业务场景的上下文隔离
 
@@ -45,7 +45,7 @@
 两者共同作用，防止重放攻击。
 
 ### 注意事项
-- 服务端使用了本地 sqlite 持久化 nonce, 请注意配合连接粘滞策略使用
+- 服务端使用可插拔存储后端，请根据部署场景选择合适的后端
 - 签名算法通过闭包完全可定制，提供最大灵活性
 
 ## 快速开始
@@ -54,7 +54,7 @@
 
 ```toml
 [dependencies]
-nonce-auth = "0.2.0"
+nonce-auth = "0.4.0"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -66,7 +66,8 @@ hmac = "0.12"
 
 ```rust
 use hmac::Mac;
-use nonce_auth::{NonceClient, NonceServer};
+use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -74,13 +75,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 客户端和服务端之间的预共享密钥
     let psk = b"my-secret-key";
 
+    // 创建存储后端
+    let storage = Arc::new(MemoryStorage::new());
+    
     // 初始化服务端
-    NonceServer::init().await?;
     let server = NonceServer::new(
         psk,
+        storage,
         Some(Duration::from_secs(300)), // 5 分钟 nonce 存储 TTL
         Some(Duration::from_secs(60)),  // 1 分钟时间戳验证窗口
     );
+    
+    // 初始化服务器
+    server.init().await?;
 
     // 初始化客户端
     let client = NonceClient::new(psk);
@@ -200,10 +207,14 @@ async function makeAuthenticatedRequest() {
             body: JSON.stringify(requestData)
         });
         
-        const result = await response.json();
-        console.log('服务器响应:', result);
+        if (response.ok) {
+            const result = await response.json();
+            console.log('响应:', result);
+        } else {
+            console.error('请求失败:', response.status);
+        }
     } catch (error) {
-        console.error('请求失败:', error);
+        console.error('请求错误:', error);
     }
 }
 ```
@@ -212,122 +223,96 @@ async function makeAuthenticatedRequest() {
 
 ```rust
 // server.rs
-use hmac::Mac;
-use nonce_auth::NonceServer;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use nonce_auth::{NonceServer, storage::MemoryStorage};
 use std::sync::Arc;
-use std::time::Duration;
 use warp::Filter;
+use serde::{Deserialize, Serialize};
+use hmac::Mac;
 
 #[derive(Deserialize)]
-struct AuthenticatedRequest {
+struct AuthData {
+    timestamp: u64,
+    nonce: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct ProtectedRequest {
     payload: String,
     session_id: String,
-    auth: nonce_auth::ProtectionData,
+    auth: AuthData,
 }
 
 #[derive(Serialize)]
 struct ApiResponse {
     success: bool,
     message: String,
-    data: Option<String>,
+    echo: Option<String>,
 }
-
-// 为每个会话存储 PSK
-type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
 
 #[tokio::main]
 async fn main() {
-    // 初始化 nonce 服务器数据库
-    NonceServer::init()
-        .await
-        .expect("Failed to initialize database");
+    // 创建存储后端（可以使用 SQLite、Redis 等）
+    let storage = Arc::new(MemoryStorage::new());
+    
+    // 创建服务器
+    let server = NonceServer::new(
+        b"shared-secret-key",
+        storage,
+        None, // 使用默认 TTL
+        None, // 使用默认时间窗口
+    );
+    
+    // 初始化服务器
+    server.init().await.expect("Failed to initialize server");
+    
+    let server = Arc::new(server);
 
-    // 创建 PSK 存储
-    let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
-
-    // 在根路径提供带嵌入 PSK 的 index.html
-    let psk_store_filter = warp::any().map(move || psk_store.clone());
-    let index_route = warp::path::end()
-        .and(psk_store_filter.clone())
-        .and_then(handle_index_request);
-
-    // 受保护的 API 路由
-    let protected_route = warp::path("api")
+    // 创建 API 路由
+    let api = warp::path("api")
         .and(warp::path("protected"))
         .and(warp::post())
         .and(warp::body::json())
-        .and(psk_store_filter)
+        .and(warp::any().map(move || server.clone()))
         .and_then(handle_protected_request);
 
-    // 组合路由
-    let routes = index_route.or(protected_route).with(
-        warp::cors()
-            .allow_any_origin()
-            .allow_headers(vec!["content-type"])
-            .allow_methods(vec!["GET", "POST"]),
-    );
-
-    println!("服务器运行在 http://localhost:3000");
-    println!("在浏览器中打开此 URL 来测试认证");
-    println!("每次页面刷新都会生成新的 PSK");
-
-    warp::serve(routes).run(([127, 0, 0, 1], 3000)).await;
+    // 启动服务器
+    println!("服务器运行在 http://127.0.0.1:3030");
+    warp::serve(api)
+        .run(([127, 0, 0, 1], 3030))
+        .await;
 }
 
 async fn handle_protected_request(
-    req: AuthenticatedRequest,
-    psk_store: PskStore,
+    req: ProtectedRequest,
+    server: Arc<NonceServer<MemoryStorage>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    // 使用会话 ID 从存储中获取 PSK
-    let psk = {
-        let store = psk_store.lock().unwrap();
-        println!("查找会话 ID: {}", req.session_id);
-        store.get(&req.session_id).cloned()
+    // 从请求创建保护数据
+    let protection_data = nonce_auth::ProtectionData {
+        timestamp: req.auth.timestamp,
+        nonce: req.auth.nonce,
+        signature: req.auth.signature,
     };
 
-    let psk = match psk {
-        Some(psk) => psk,
-        None => {
-            let response = ApiResponse {
-                success: false,
-                message: "无效的会话 ID。请刷新页面。".to_string(),
-                data: None,
-            };
-            return Ok(warp::reply::json(&response));
-        }
-    };
-
-    // 使用 PSK 创建服务器
-    let server = NonceServer::new(
-        psk.as_bytes(),
-        Some(Duration::from_secs(60)), // 1 分钟 TTL
-        Some(Duration::from_secs(15)), // 15 秒时间窗口
-    );
-
-    // 使用包含载荷的自定义签名验证请求
-    match server
-        .verify_protection_data(&req.auth, None, |mac| {
-            mac.update(req.auth.timestamp.to_string().as_bytes());
-            mac.update(req.auth.nonce.as_bytes());
-            mac.update(req.payload.as_bytes());
-        })
-        .await
-    {
+    // 验证认证数据
+    match server.verify_protection_data(&protection_data, Some(&req.session_id), |mac| {
+        mac.update(protection_data.timestamp.to_string().as_bytes());
+        mac.update(protection_data.nonce.as_bytes());
+        mac.update(req.payload.as_bytes());
+    }).await {
         Ok(()) => {
             let response = ApiResponse {
                 success: true,
-                message: "请求认证成功".to_string(),
-                data: Some(format!("已处理: {}", req.payload)),
+                message: "认证成功".to_string(),
+                echo: Some(req.payload),
             };
             Ok(warp::reply::json(&response))
         }
         Err(e) => {
             let response = ApiResponse {
                 success: false,
-                message: format!("认证失败: {e:?}"),
-                data: None,
+                message: format!("认证失败: {e}"),
+                echo: None,
             };
             Ok(warp::reply::json(&response))
         }
@@ -335,172 +320,139 @@ async fn handle_protected_request(
 }
 ```
 
-### 示例认证流程时序图
+## 存储后端
 
-```mermaid
-sequenceDiagram
-    participant Browser as Web 浏览器
-    participant RustServer as Rust 服务端
-    participant DB as SQLite 数据库
+库通过 `NonceStorage` trait 支持多种存储后端：
 
-    Note over Browser, DB: 基于会话的认证流程
+### 内置存储后端
 
-    Browser->>RustServer: 1. GET / (页面请求)
-    RustServer->>RustServer: 2. 生成随机 PSK 和会话 ID
-    RustServer->>RustServer: 3. 使用会话 ID 存储 PSK
-    RustServer->>Browser: 4. 带嵌入 PSK 和会话 ID 的 HTML
-    
-    Browser->>Browser: 5. 用户输入载荷
-    Browser->>Browser: 6. 生成 UUID nonce
-    Browser->>Browser: 7. 创建时间戳
-    Browser->>Browser: 8. 使用 HMAC-SHA256 签名 (时间戳 + nonce + 载荷)
-    
-    Browser->>RustServer: 9. POST /api/protected<br/>{payload, session_id, auth: {timestamp, nonce, signature}}
-    
-    RustServer->>RustServer: 10. 通过 session_id 查找 PSK
-    
-    alt 无效的会话 ID
-        RustServer-->>Browser: 401 无效的会话 ID
-    end
-    
-    RustServer->>RustServer: 11. 使用 PSK 创建 NonceServer
-    RustServer->>RustServer: 12. 验证时间戳是否在窗口内
-    
-    alt 时间戳超出窗口
-        RustServer-->>Browser: 401 时间戳过期
-    end
-    
-    RustServer->>RustServer: 13. 验证 HMAC 签名
-    
-    alt 签名无效
-        RustServer-->>Browser: 401 签名无效
-    end
-    
-    RustServer->>DB: 14. 检查 nonce 是否存在
-    
-    alt Nonce 已被使用
-        RustServer-->>Browser: 401 重复 nonce
-    end
-    
-    RustServer->>DB: 15. 存储 nonce
-    RustServer->>RustServer: 16. 处理业务逻辑
-    RustServer-->>Browser: 200 成功响应
-    
-    Note over RustServer, DB: 后台清理
-    RustServer->>DB: 适时清理过期 nonce
+#### 内存存储
+```rust
+use nonce_auth::storage::MemoryStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
 ```
 
-## API 文档
+**特点：**
+- 使用 HashMap 的快速内存存储
+- 使用 Arc<Mutex<HashMap>> 保证线程安全
+- 适用于单实例应用
+- 重启时不保留数据
 
-### NonceClient
+### 自定义存储后端
 
-#### 构造函数
+#### SQLite 存储
+参考 `examples/sqlite_storage.rs` 获取完整实现：
 
 ```rust
-pub fn new(secret: &[u8]) -> Self
+use nonce_auth::examples::SqliteStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
 ```
 
-- `secret`: 用于签名的密钥
-
-#### 方法
-
-##### 创建认证数据
-
+#### Redis 存储（示例）
 ```rust
-pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
-```
+// 您可以类似地实现 Redis 存储
+pub struct RedisStorage {
+    client: redis::Client,
+}
 
-使用自定义签名算法生成认证数据。闭包接收 MAC 实例、时间戳字符串和 nonce 字符串。
-
-##### 生成签名
-
-```rust
-pub fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
-```
-
-使用自定义数据构建器生成 HMAC-SHA256 签名。
-
-### NonceServer
-
-#### 构造函数
-
-```rust
-pub fn new(
-    secret: &[u8], 
-    default_ttl: Option<Duration>, 
-    time_window: Option<Duration>
-) -> Self
-```
-
-- `secret`: 用于验证的密钥
-- `default_ttl`: 默认 nonce 过期时间（默认：5 分钟）
-- `time_window`: 时间戳验证允许的时间窗口（默认：1 分钟）
-
-#### 方法
-
-##### 验证认证数据
-
-```rust
-pub async fn verify_protection_data<F>(
-    &self, 
-    protection_data: &ProtectionData, 
-    context: Option<&str>,
-    signature_builder: F,
-) -> Result<(), NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
-```
-
-使用自定义签名算法验证认证数据。闭包应与客户端使用的匹配。
-
-##### 初始化数据库
-
-```rust
-pub async fn init() -> Result<(), NonceError>
-```
-
-创建必要的数据库表和索引。
-
-### ProtectionData
-
-```rust
-pub struct ProtectionData {
-    pub timestamp: u64,    // Unix 时间戳
-    pub nonce: String,     // UUID 格式的一次性令牌
-    pub signature: String, // HMAC-SHA256 签名
+#[async_trait]
+impl NonceStorage for RedisStorage {
+    // 实现细节...
 }
 ```
 
-### 错误类型
+## 序列图
+
+### 认证流程
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant Server as 服务端
+    participant Storage as 存储后端
+
+    Client->>Client: 生成时间戳 + nonce
+    Client->>Client: 创建 HMAC 签名
+    Client->>Server: 发送签名请求
+    Server->>Storage: 检查 nonce 是否存在
+    Storage-->>Server: Nonce 不存在（正常）
+    Server->>Server: 验证签名
+    Server->>Server: 验证时间戳窗口
+    Server->>Storage: 存储 nonce 并设置 TTL
+    Storage-->>Server: Nonce 已存储
+    Server-->>Client: 认证成功
+```
+
+### 重放攻击防护
+
+```mermaid
+sequenceDiagram
+    participant Attacker as 攻击者
+    participant Server as 服务端
+    participant Storage as 存储后端
+
+    Attacker->>Server: 重放之前的请求
+    Server->>Storage: 检查 nonce 是否存在
+    Storage-->>Server: Nonce 已存在
+    Server-->>Attacker: 认证失败（重复 nonce）
+```
+
+## 配置
+
+### 环境变量
+
+```bash
+# 安全配置
+export NONCE_AUTH_DEFAULT_TTL=300                  # 默认 TTL (秒)
+export NONCE_AUTH_DEFAULT_TIME_WINDOW=60           # 时间窗口 (秒)
+```
+
+### 程序化配置
+
+```rust
+use nonce_auth::{NonceServer, storage::MemoryStorage};
+use std::sync::Arc;
+use std::time::Duration;
+
+let storage = Arc::new(MemoryStorage::new());
+let server = NonceServer::new(
+    b"your-secret-key",
+    storage,
+    Some(Duration::from_secs(600)),  // 自定义 TTL
+    Some(Duration::from_secs(120)),  // 自定义时间窗口
+);
+```
+
+## 错误类型
 
 ```rust
 pub enum NonceError {
-    DuplicateNonce,         // Nonce 已被使用
+    DuplicateNonce,         // Nonce 已使用
     ExpiredNonce,           // Nonce 已过期
-    InvalidSignature,       // 签名无效
-    TimestampOutOfWindow,   // 时间戳超出允许窗口
-    DatabaseError(String),  // 数据库错误
+    InvalidSignature,       // 无效签名
+    TimestampOutOfWindow,   // 时间戳超出窗口
+    DatabaseError(String),  // 存储后端错误
     CryptoError(String),    // 加密错误
 }
 ```
 
-## 典型使用场景
+## 典型用例
 
 ### 1. API 认证
 - 客户端为每个请求生成认证数据
 - 服务端独立验证每个请求
 - 每个认证数据只能使用一次
 
-### 2. 表单提交防重复
+### 2. 表单提交保护
 - 渲染表单时生成认证数据
 - 提交时验证认证数据
-- 防止表单重复提交
+- 防止重复表单提交
 
-### 3. 微服务间认证
+### 3. 微服务认证
 - 服务 A 为请求生成认证数据
 - 服务 B 验证来自服务 A 的请求
 - 确保请求的唯一性和真实性
@@ -512,42 +464,43 @@ pub enum NonceError {
 
 ## 安全特性
 
-### 防重放攻击
+### 重放攻击防护
 
 1. **时间窗口限制**: 只接受指定时间窗口内的请求
-2. **一次性 Nonce**: 每个 nonce 验证后立即删除，确保无法重复使用
+2. **一次性 Nonce**: 每个 nonce 验证后删除，确保不会重用
 3. **上下文隔离**: 不同业务场景的 nonce 相互隔离
 
-### 防时序攻击
+### 时序攻击防护
 
-- 使用常量时间比较算法验证签名
+- 签名验证使用常量时间比较算法
 
 ### 加密强度
 
-- 使用 HMAC-SHA256 算法确保签名的完整性和真实性
+- 使用 HMAC-SHA256 算法确保签名完整性和真实性
 - 支持自定义密钥长度
 - 通过闭包实现灵活的签名算法
 
 ## 性能优化
 
-- 自动后台清理过期 nonce 记录
-- 数据库索引优化查询性能
+- 自动后台清理过期的 nonce 记录
+- 可插拔存储后端提供最佳性能
 - 异步设计支持高并发场景
 
 ## 依赖
 
 - `hmac` - HMAC 签名
 - `sha2` - SHA256 哈希
-- `rusqlite` - SQLite 数据库库
 - `uuid` - UUID 生成
-- `serde` - 序列化支持
+- `async-trait` - 异步 trait 支持
 - `tokio` - 异步运行时
-- `thiserror` - 错误处理
+
+存储后端可能有额外的依赖（如 SQLite 存储需要 `rusqlite`）。
 
 ## 许可证
 
-MIT
+本项目采用以下任一许可证：
 
-## 贡献
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) 或 http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) 或 http://opensource.org/licenses/MIT)
 
-欢迎提交 Issue 和 Pull Request！ 
+您可以任选其一。 

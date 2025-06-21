@@ -1,53 +1,74 @@
 use hmac::Mac;
 use nonce_auth::nonce::NonceConfig;
-use nonce_auth::{NonceClient, NonceServer};
+use nonce_auth::{
+    NonceClient, NonceServer,
+    storage::{MemoryStorage, NonceStorage},
+};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Nonce Authentication with Optimized SQLite ===\n");
+    println!("=== Nonce Authentication with Optimized Storage ===\n");
 
-    // 1. Set environment for production configuration
-    unsafe {
-        std::env::set_var("NONCE_AUTH_PRESET", "production");
-        // Override specific settings if needed
-        std::env::set_var("NONCE_AUTH_CACHE_SIZE", "16384"); // 16MB for demo
+    // 1. Create different storage backends for demonstration
+    let memory_storage = Arc::new(MemoryStorage::new());
+
+    // 2. Configuration examples
+    println!("=== Configuration Examples ===\n");
+
+    let configs = vec![
+        ("Production", NonceConfig::production()),
+        ("Development", NonceConfig::development()),
+        ("High-Security", NonceConfig::high_security()),
+    ];
+
+    for (name, config) in &configs {
+        println!("{name} Configuration:");
+        println!("{}", config.summary());
+
+        let issues = config.validate();
+        if issues.is_empty() {
+            println!("✓ Configuration is valid\n");
+        } else {
+            println!("⚠ Configuration issues:");
+            for issue in issues {
+                println!("  - {issue}");
+            }
+            println!();
+        }
     }
 
-    // Configuration is automatically loaded from environment
-    let config = NonceConfig::from_env();
-    println!("Production Configuration (NONCE_AUTH_PRESET=production):");
-    println!("{}\n", config.summary());
-
-    // 2. Initialize the optimized database
-    println!("Initializing optimized database...");
-    NonceServer::init().await?;
-    println!("✓ Database initialized with performance optimizations\n");
-
-    // 3. Create server with custom settings
+    // 3. Create server with production configuration
+    let config = NonceConfig::production();
     let server = NonceServer::new(
         b"production_secret_key_12345",
-        Some(Duration::from_secs(600)), // 10 minutes TTL
-        Some(Duration::from_secs(120)), // 2 minutes time window
+        memory_storage.clone(),
+        Some(config.default_ttl),
+        Some(config.time_window),
     );
+
+    // Initialize storage
+    server.init().await?;
 
     let client = NonceClient::new(b"production_secret_key_12345");
 
     // 4. Simulate high-load scenario
-    println!("Simulating high-load authentication scenario...");
+    println!("=== High-Load Authentication Scenario ===\n");
+    println!("Processing 100 authentication requests...");
 
     let start = std::time::Instant::now();
     let mut successful_auths = 0;
 
     for i in 0..100 {
-        // Create protection data
+        // Create protection data with additional payload
         let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
             mac.update(timestamp.as_bytes());
             mac.update(nonce.as_bytes());
             mac.update(format!("request_{i}").as_bytes());
         })?;
 
-        // Verify protection data
+        // Verify protection data with context
         match server
             .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
                 mac.update(protection_data.timestamp.to_string().as_bytes());
@@ -61,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Simulate some processing time
-        if i % 10 == 0 {
+        if i % 20 == 0 {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
@@ -70,54 +91,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✓ Processed 100 authentication requests in {duration:?}");
     println!("✓ Successful authentications: {successful_auths}/100\n");
 
-    // 5. Demonstrate cleanup performance
-    println!("Testing cleanup performance...");
+    // 5. Storage statistics
+    println!("=== Storage Statistics ===\n");
+    let stats = server.storage().get_stats().await?;
+    println!("Storage Backend: {}", stats.backend_info);
+    println!("Total Records: {}", stats.total_records);
+    println!();
+
+    // 6. Demonstrate cleanup performance
+    println!("=== Cleanup Performance ===\n");
     let cleanup_start = std::time::Instant::now();
-    let deleted_count = NonceServer::cleanup_expired_nonces(Duration::from_secs(1)).await?;
+    let deleted_count = server
+        .cleanup_expired_nonces(Duration::from_secs(1))
+        .await?;
     let cleanup_duration = cleanup_start.elapsed();
 
-    println!("✓ Cleaned up {deleted_count} expired nonces in {cleanup_duration:?}\n");
+    println!("✓ Cleaned up {deleted_count} expired nonces in {cleanup_duration:?}");
 
-    // 6. Test different configuration presets
-    println!("=== Configuration Presets ===\n");
+    // Show updated stats
+    let stats_after = server.storage().get_stats().await?;
+    println!("✓ Records after cleanup: {}", stats_after.total_records);
+    println!();
 
-    // Development configuration
-    let dev_config = NonceConfig::development();
-    println!("Development Configuration:");
-    println!("{}\n", dev_config.summary());
+    // 7. Context isolation demonstration
+    println!("=== Context Isolation Demonstration ===\n");
 
-    // High-performance configuration
-    let perf_config = NonceConfig::high_performance();
-    println!("High-Performance Configuration:");
-    println!("{}\n", perf_config.summary());
+    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
+        mac.update(timestamp.as_bytes());
+        mac.update(nonce.as_bytes());
+    })?;
 
-    // 7. Configuration validation
-    println!("=== Configuration Validation ===\n");
-
-    let configs = vec![
-        ("Production", NonceConfig::production()),
-        ("Development", NonceConfig::development()),
-        ("High-Performance", NonceConfig::high_performance()),
-    ];
-
-    for (name, config) in configs {
-        let issues = config.validate();
-        if issues.is_empty() {
-            println!("✓ {name} configuration is valid");
-        } else {
-            println!("⚠ {name} configuration has issues:");
-            for issue in issues {
-                println!("  - {issue}");
-            }
+    // Same nonce should work in different contexts
+    let contexts = ["api_v1", "api_v2", "admin_panel"];
+    for context in contexts {
+        match server
+            .verify_protection_data(&protection_data, Some(context), |mac| {
+                mac.update(protection_data.timestamp.to_string().as_bytes());
+                mac.update(protection_data.nonce.as_bytes());
+            })
+            .await
+        {
+            Ok(()) => println!("✓ Nonce accepted in context: {context}"),
+            Err(e) => println!("❌ Nonce rejected in context {context}: {e}"),
         }
     }
 
-    println!("\n=== Performance Tips ===");
-    println!("1. Use WAL mode for better concurrency (enabled by default)");
-    println!("2. Adjust cache size based on available memory");
-    println!("3. Use batch operations for bulk inserts");
-    println!("4. Regular cleanup prevents database bloat");
-    println!("5. Monitor database size and performance metrics");
+    // Try to reuse in the same context (should fail)
+    match server
+        .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
+            mac.update(protection_data.timestamp.to_string().as_bytes());
+            mac.update(protection_data.nonce.as_bytes());
+        })
+        .await
+    {
+        Ok(()) => println!("❌ This should not happen - nonce reuse detected"),
+        Err(e) => println!("✓ Correctly rejected duplicate nonce in api_v1: {e}"),
+    }
+
+    println!();
+
+    // 8. Server configuration info
+    println!("=== Server Configuration ===\n");
+    println!("TTL: {:?}", server.ttl());
+    println!("Time Window: {:?}", server.time_window());
+    println!();
+
+    println!("=== Performance Tips ===");
+    println!("1. Choose appropriate storage backend based on needs:");
+    println!("   - MemoryStorage: Fast, but data lost on restart");
+    println!("   - SQLite: Persistent, good for single-instance apps");
+    println!("   - Redis: Distributed, good for multi-instance apps");
+    println!("2. Adjust TTL based on security vs usability trade-offs");
+    println!("3. Use context isolation for different API endpoints");
+    println!("4. Regular cleanup prevents storage bloat");
+    println!("5. Monitor storage statistics for performance insights");
 
     Ok(())
 }

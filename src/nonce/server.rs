@@ -1,51 +1,54 @@
 use hmac::Mac;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{NonceError, database::get_database};
+use super::{NonceError, NonceStorage};
 use crate::HmacSha256;
 use crate::ProtectionData;
 
-/// Server-side nonce manager for verifying signed requests and managing nonce storage.
+/// Server-side nonce manager for verifying signed requests with pluggable storage backends.
 ///
 /// The `NonceServer` is responsible for:
 /// - Verifying the integrity of signed requests from clients
-/// - Managing nonce storage and preventing replay attacks
-/// - Cleaning up expired nonce records automatically
+/// - Managing nonce storage through pluggable storage backends
+/// - Preventing replay attacks by ensuring each nonce is used only once
 /// - Providing configurable TTL and time window settings
+///
+/// # Storage Backend
+///
+/// The server requires a storage backend that implements the `NonceStorage` trait.
+/// This allows for flexible storage solutions including in-memory, database,
+/// Redis, or any custom implementation.
 ///
 /// # Security Features
 ///
 /// - **Replay Attack Prevention**: Each nonce can only be used once
 /// - **Time Window Validation**: Requests outside the time window are rejected
 /// - **Context Isolation**: Nonces can be scoped to different business contexts
-/// - **Automatic Cleanup**: Expired nonces are cleaned up in the background
-///
-/// # Database Storage
-///
-/// The server uses SQLite for persistent nonce storage. The database location
-/// can be configured using the `NONCE_AUTH_DB_PATH` environment variable.
-/// If not set, it defaults to `nonce_auth.db` in the current directory.
+/// - **Automatic Cleanup**: Expired nonces can be cleaned up through the storage backend
 ///
 /// # Example
 ///
 /// ```rust
-/// use nonce_auth::NonceServer;
+/// use nonce_auth::{NonceServer, storage::MemoryStorage};
 /// use std::time::Duration;
+/// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Initialize the database
-/// NonceServer::init().await?;
+/// // Create a storage backend
+/// let storage = Arc::new(MemoryStorage::new());
 ///
-/// // Create a server with custom settings
+/// // Create a server with the storage backend
 /// let server = NonceServer::new(
 ///     b"my_secret_key",
+///     storage,
 ///     Some(Duration::from_secs(300)), // 5 minutes TTL
 ///     Some(Duration::from_secs(60)),  // 1 minute time window
 /// );
 /// # Ok(())
 /// # }
 /// ```
-pub struct NonceServer {
+pub struct NonceServer<S: NonceStorage> {
     /// Default time-to-live for nonce records. After this duration,
     /// nonces are considered expired and will be cleaned up.
     default_ttl: Duration,
@@ -57,17 +60,21 @@ pub struct NonceServer {
     /// Secret key used for HMAC signature verification.
     /// This should match the secret used by the client.
     secret: Vec<u8>,
+
+    /// Storage backend for nonce persistence.
+    storage: Arc<S>,
 }
 
-impl NonceServer {
+impl<S: NonceStorage> NonceServer<S> {
     /// Creates a new `NonceServer` instance with the specified configuration.
     ///
     /// # Arguments
     ///
     /// * `secret` - The secret key used for HMAC signature verification.
     ///   This must match the secret used by the client.
+    /// * `storage` - The storage backend implementation for nonce persistence.
     /// * `default_ttl` - Optional TTL for nonce records. If `None`, defaults to 5 minutes.
-    ///   This controls how long nonces remain valid in the database.
+    ///   This controls how long nonces remain valid in the storage backend.
     /// * `time_window` - Optional time window for timestamp validation. If `None`, defaults to 1 minute.
     ///   This controls how much clock skew is allowed between client and server.
     ///
@@ -78,21 +85,26 @@ impl NonceServer {
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::NonceServer;
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
     /// use std::time::Duration;
+    /// use std::sync::Arc;
     ///
     /// // Create server with default settings
-    /// let server = NonceServer::new(b"my_secret", None, None);
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"my_secret", storage, None, None);
     ///
     /// // Create server with custom settings
+    /// let storage = Arc::new(MemoryStorage::new());
     /// let server = NonceServer::new(
     ///     b"my_secret",
+    ///     storage,
     ///     Some(Duration::from_secs(600)), // 10 minutes TTL
     ///     Some(Duration::from_secs(120)), // 2 minutes time window
     /// );
     /// ```
     pub fn new(
         secret: &[u8],
+        storage: Arc<S>,
         default_ttl: Option<Duration>,
         time_window: Option<Duration>,
     ) -> Self {
@@ -102,6 +114,7 @@ impl NonceServer {
             default_ttl,
             time_window,
             secret: secret.to_vec(),
+            storage,
         }
     }
 
@@ -125,13 +138,14 @@ impl NonceServer {
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::{NonceServer, ProtectionData};
+    /// use nonce_auth::{NonceServer, ProtectionData, storage::MemoryStorage};
     /// use std::time::Duration;
+    /// use std::sync::Arc;
     /// use hmac::Mac;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # NonceServer::init().await?;
-    /// let server = NonceServer::new(b"secret", None, None);
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
     /// let protection_data = ProtectionData {
     ///     timestamp: 1234567890,
     ///     nonce: "unique-nonce".to_string(),
@@ -166,99 +180,62 @@ impl NonceServer {
         // 2. Verify signature with custom builder
         self.verify_signature(&protection_data.signature, signature_builder)?;
 
-        // 3. Verify nonce is valid and not used
+        // 3. Verify nonce is valid and not used, then consume it
         self.verify_and_consume_nonce(&protection_data.nonce, context)
             .await?;
 
         Ok(())
     }
 
-    /// Initializes the database schema for nonce storage.
+    /// Initializes the storage backend.
     ///
-    /// This method creates the necessary tables and indexes if they don't already exist.
-    /// It should be called once before using any `NonceServer` instances.
-    ///
-    /// # Database Configuration
-    ///
-    /// The database location can be configured using the `NONCE_AUTH_DB_PATH` environment variable:
-    /// - If set to `:memory:`, uses an in-memory database (useful for testing)
-    /// - If set to a file path, uses that file for persistent storage
-    /// - If not set, defaults to `nonce_auth.db` in the current directory
-    ///
-    /// # Schema
-    ///
-    /// Creates the following table:
-    /// ```sql
-    /// CREATE TABLE nonce_record (
-    ///     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ///     nonce TEXT NOT NULL,
-    ///     created_at INTEGER NOT NULL,
-    ///     context TEXT,
-    ///     UNIQUE(nonce, context)
-    /// );
-    /// ```
+    /// This method calls the storage backend's `init()` method, which can be used
+    /// for tasks like schema creation, connection setup, etc.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - If database initialization succeeded
-    /// * `Err(NonceError::DatabaseError)` - If there was a database error
+    /// * `Ok(())` - If initialization succeeded
+    /// * `Err(NonceError)` - If initialization failed
     ///
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::NonceServer;
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
+    /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Initialize with default database location
-    /// NonceServer::init().await?;
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
     ///
-    /// // Or configure database location via environment variable
-    /// unsafe { std::env::set_var("NONCE_AUTH_DB_PATH", "/path/to/nonce_auth.db"); }
-    /// NonceServer::init().await?;
+    /// // Initialize the storage backend
+    /// server.init().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn init() -> Result<(), NonceError> {
-        let db = get_database()?;
-        db.init_schema()?;
-        Ok(())
+    pub async fn init(&self) -> Result<(), NonceError> {
+        self.storage.init().await
     }
 
-    /// Verifies timestamp is within the allowed window.
+    /// Verifies that the timestamp is within the allowed time window.
     ///
-    /// # Arguments
-    ///
-    /// * `timestamp` - The timestamp to verify (seconds since Unix epoch)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the timestamp is within the allowed window
-    /// * `Err(NonceError::TimestampOutOfWindow)` - If the timestamp is too old or too far in the future
+    /// This method checks that the timestamp is not too old or too far in the future
+    /// compared to the server's current time.
     pub(crate) fn verify_timestamp(&self, timestamp: u64) -> Result<(), NonceError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
+            .as_secs();
 
-        let time_diff = (now - timestamp as i64).unsigned_abs();
+        let time_diff = now.abs_diff(timestamp);
+
         if time_diff > self.time_window.as_secs() {
             return Err(NonceError::TimestampOutOfWindow);
         }
+
         Ok(())
     }
 
-    /// Verifies HMAC signature with custom data builder.
-    ///
-    /// # Arguments
-    ///
-    /// * `signature` - The signature to verify (hex-encoded)
-    /// * `data_builder` - A closure that adds data to the HMAC instance
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the signature is valid
-    /// * `Err(NonceError::InvalidSignature)` - If the signature is invalid
-    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
+    /// Verifies the HMAC signature using the provided data builder.
     pub(crate) fn verify_signature<F>(
         &self,
         signature: &str,
@@ -268,22 +245,13 @@ impl NonceServer {
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
     {
         let expected_signature = self.generate_signature(data_builder)?;
-        if expected_signature != signature {
+        if signature != expected_signature {
             return Err(NonceError::InvalidSignature);
         }
         Ok(())
     }
 
-    /// Generates HMAC signature with custom data builder.
-    ///
-    /// # Arguments
-    ///
-    /// * `data_builder` - A closure that adds data to the HMAC instance
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The hex-encoded HMAC signature
-    /// * `Err(NonceError::CryptoError)` - If there's an error in the crypto operations
+    /// Generates an HMAC signature using the provided data builder.
     fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
@@ -298,201 +266,214 @@ impl NonceServer {
         Ok(signature)
     }
 
-    /// Verifies that a nonce is valid and hasn't been used, then marks it as consumed.
+    /// Verifies that a nonce is valid and hasn't been used, then stores it.
     ///
-    /// This method implements the core replay attack prevention logic:
-    /// 1. Checks if the nonce already exists in the database
-    /// 2. If it exists, determines if it's expired or duplicate
-    /// 3. If it doesn't exist, stores it to prevent future reuse
-    /// 4. Triggers background cleanup of expired nonces
-    ///
-    /// # Arguments
-    ///
-    /// * `nonce` - The nonce string to verify and consume
-    /// * `context` - Optional context for nonce scoping
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If the nonce is valid and has been consumed
-    /// * `Err(NonceError)` - If the nonce is invalid, expired, or already used
+    /// This method atomically checks for nonce existence and stores it if it's new.
+    /// The storage backend is responsible for ensuring atomicity of this operation.
     async fn verify_and_consume_nonce(
         &self,
         nonce: &str,
         context: Option<&str>,
     ) -> Result<(), NonceError> {
-        let db = get_database()?;
-
-        // Check if nonce already exists (has been used)
-        if let Some((_, created_at)) = db.nonce_exists(nonce, context)? {
-            // Check if it's expired
-            if Self::is_time_expired(created_at, self.default_ttl) {
+        // Check if nonce already exists and retrieve entry for expiration check
+        if let Some(entry) = self.storage.get(nonce, context).await? {
+            // Check if the existing nonce has expired
+            if Self::is_time_expired(entry.created_at, self.default_ttl) {
+                // Nonce exists but is expired
                 return Err(NonceError::ExpiredNonce);
+            } else {
+                // Nonce exists and is still valid - this is a duplicate
+                return Err(NonceError::DuplicateNonce);
             }
-            return Err(NonceError::DuplicateNonce);
         }
 
-        // Store the nonce to mark it as used
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        db.insert_nonce(nonce, now, context)?;
-
-        // Clean up expired nonces in the background
-        let ttl = self.default_ttl;
-        tokio::spawn(async move {
-            if let Err(e) = Self::cleanup_expired_nonces(ttl).await {
-                eprintln!("Failed to clean up expired nonces: {e}");
-            }
-        });
+        // Nonce doesn't exist, store it
+        self.storage.set(nonce, context, self.default_ttl).await?;
 
         Ok(())
     }
 
-    /// Cleans up expired nonce records from the database.
+    /// Cleans up expired nonces from the storage backend.
     ///
-    /// This method removes all nonce records that are older than the specified TTL.
-    /// It's called automatically in the background after each nonce verification,
-    /// but can also be called manually for maintenance purposes.
+    /// This method removes all nonces that have exceeded the specified TTL duration.
+    /// It can be called periodically to maintain storage efficiency.
     ///
     /// # Arguments
     ///
-    /// * `ttl` - The time-to-live duration. Records older than this will be deleted.
+    /// * `ttl` - Time-to-live duration; nonces older than this will be removed
     ///
     /// # Returns
     ///
-    /// * `Ok(usize)` - Number of records deleted
-    /// * `Err(NonceError::DatabaseError)` - If there was a database error during cleanup
+    /// * `Ok(count)` - Number of nonces that were removed
+    /// * `Err(NonceError)` - If cleanup failed
     ///
     /// # Example
     ///
     /// ```rust
-    /// use nonce_auth::NonceServer;
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
     /// use std::time::Duration;
+    /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # NonceServer::init().await?;
-    /// // Manual cleanup of nonces older than 1 hour
-    /// let deleted_count = NonceServer::cleanup_expired_nonces(Duration::from_secs(3600)).await?;
-    /// println!("Deleted {} expired nonces", deleted_count);
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
+    ///
+    /// // Clean up nonces older than 1 hour
+    /// let removed = server.cleanup_expired_nonces(Duration::from_secs(3600)).await?;
+    /// println!("Removed {} expired nonces", removed);
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cleanup_expired_nonces(ttl: Duration) -> Result<usize, NonceError> {
-        let db = get_database()?;
-
-        let now = SystemTime::now()
+    pub async fn cleanup_expired_nonces(&self, ttl: Duration) -> Result<usize, NonceError> {
+        let cutoff_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
+            .as_secs() as i64
+            - ttl.as_secs() as i64;
 
-        let cutoff_time = now - ttl.as_secs() as i64;
-        let deleted_count = db.cleanup_expired(cutoff_time)?;
-
-        Ok(deleted_count)
+        self.storage.cleanup_expired(cutoff_time).await
     }
 
-    /// Returns the default TTL (time-to-live) duration for nonce records.
-    ///
-    /// This is the duration after which nonces are considered expired
-    /// and will be cleaned up from the database.
+    /// Returns the default TTL for nonce records.
     ///
     /// # Returns
     ///
-    /// The default TTL duration configured for this server instance.
+    /// The default time-to-live duration for nonce records.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
+    /// use std::sync::Arc;
+    ///
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
+    /// let ttl = server.ttl();
+    /// println!("Default TTL: {:?}", ttl);
+    /// ```
     pub fn ttl(&self) -> Duration {
         self.default_ttl
     }
 
-    /// Returns the time window duration for timestamp validation.
-    ///
-    /// This is the maximum allowed difference between the request timestamp
-    /// and the current server time. Requests outside this window are rejected.
+    /// Returns the time window for timestamp validation.
     ///
     /// # Returns
     ///
-    /// The time window duration configured for this server instance.
+    /// The time window duration for timestamp validation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
+    /// use std::sync::Arc;
+    ///
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
+    /// let window = server.time_window();
+    /// println!("Time window: {:?}", window);
+    /// ```
     pub fn time_window(&self) -> Duration {
         self.time_window
     }
 
-    /// Checks if a nonce with given creation time has expired based on the given TTL.
+    /// Returns a reference to the storage backend.
     ///
-    /// A nonce is considered expired if the current time is greater than
-    /// the creation time plus the TTL duration.
-    ///
-    /// # Arguments
-    ///
-    /// * `created_at` - The creation timestamp
-    /// * `ttl` - The time-to-live duration for nonces
+    /// This can be useful for accessing storage-specific functionality
+    /// or getting storage statistics.
     ///
     /// # Returns
     ///
-    /// * `true` - If the nonce has expired and should be cleaned up
-    /// * `false` - If the nonce is still valid
+    /// A reference to the storage backend.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::{NonceServer, storage::MemoryStorage};
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = Arc::new(MemoryStorage::new());
+    /// let server = NonceServer::new(b"secret", storage, None, None);
+    /// use nonce_auth::storage::NonceStorage;
+    /// let stats = server.storage().get_stats().await?;
+    /// println!("Storage stats: {stats:?}");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn storage(&self) -> &Arc<S> {
+        &self.storage
+    }
+
+    /// Checks if a time is expired based on TTL.
     fn is_time_expired(created_at: i64, ttl: Duration) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        now > created_at + ttl.as_secs() as i64
+
+        now - created_at > ttl.as_secs() as i64
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nonce::storage::MemoryStorage;
 
     #[test]
     fn test_is_time_expired_not_expired() {
-        let now = SystemTime::now()
+        let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
+        let ttl = Duration::from_secs(300);
 
-        let ttl = Duration::from_secs(300); // 5 minutes TTL
-
-        // Not expired - created 100 seconds ago
-        assert!(!NonceServer::is_time_expired(now - 100, ttl));
+        assert!(!NonceServer::<MemoryStorage>::is_time_expired(
+            created_at, ttl
+        ));
     }
 
     #[test]
     fn test_is_time_expired_expired() {
-        let now = SystemTime::now()
+        let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
+            .as_secs() as i64
+            - 400; // 400 seconds ago
+        let ttl = Duration::from_secs(300); // 300 seconds TTL
 
-        let ttl = Duration::from_secs(300); // 5 minutes TTL
-
-        // Expired - created 400 seconds ago
-        assert!(NonceServer::is_time_expired(now - 400, ttl));
+        assert!(NonceServer::<MemoryStorage>::is_time_expired(
+            created_at, ttl
+        ));
     }
 
     #[test]
     fn test_is_time_expired_edge_case() {
-        let now = SystemTime::now()
+        let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
+            .as_secs() as i64
+            - 301; // Just over TTL seconds ago
+        let ttl = Duration::from_secs(300);
 
-        let ttl = Duration::from_secs(300); // 5 minutes TTL
-
-        // Edge case - created 301 seconds ago (1 second past TTL)
-        assert!(NonceServer::is_time_expired(now - 301, ttl));
+        // Should be expired (> TTL is expired)
+        assert!(NonceServer::<MemoryStorage>::is_time_expired(
+            created_at, ttl
+        ));
     }
 
     #[test]
     fn test_is_time_expired_future_created_at() {
-        let now = SystemTime::now()
+        let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs() as i64;
+            .as_secs() as i64
+            + 100; // 100 seconds in the future
+        let ttl = Duration::from_secs(300);
 
-        let ttl = Duration::from_secs(300); // 5 minutes TTL
-
-        // Future timestamp (shouldn't happen in practice)
-        assert!(!NonceServer::is_time_expired(now + 100, ttl));
+        // Future timestamps should not be expired
+        assert!(!NonceServer::<MemoryStorage>::is_time_expired(
+            created_at, ttl
+        ));
     }
 }

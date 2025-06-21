@@ -14,12 +14,14 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```rust
-/// use nonce_auth::{NonceServer, NonceError, NonceClient};
+/// use nonce_auth::{NonceServer, NonceError, NonceClient, storage::MemoryStorage};
 /// use hmac::Mac;
+/// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// # NonceServer::init().await?;
-/// let server = NonceServer::new(b"secret", None, None);
+/// let storage = Arc::new(MemoryStorage::new());
+/// let server = NonceServer::new(b"secret", storage, None, None);
+/// server.init().await?;
 /// let client = NonceClient::new(b"secret");
 /// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
 ///     mac.update(timestamp.as_bytes());
@@ -163,30 +165,8 @@ pub enum NonceError {
     CryptoError(String),
 }
 
-impl From<rusqlite::Error> for NonceError {
-    /// Converts a `rusqlite::Error` into a `NonceError`.
-    ///
-    /// This implementation provides automatic conversion from database
-    /// errors to appropriate `NonceError` variants. It specifically
-    /// handles UNIQUE constraint violations (which indicate duplicate
-    /// nonces) and maps other database errors to `DatabaseError`.
-    ///
-    /// # Conversion Rules
-    ///
-    /// - UNIQUE constraint failures → `DuplicateNonce`
-    /// - All other database errors → `DatabaseError`
-    fn from(err: rusqlite::Error) -> Self {
-        match err {
-            rusqlite::Error::SqliteFailure(sqlite_err, _)
-                if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation
-                    && sqlite_err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
-            {
-                NonceError::DuplicateNonce
-            }
-            _ => NonceError::DatabaseError(err.to_string()),
-        }
-    }
-}
+// SQLite error conversion is now provided in examples/sqlite_storage.rs
+// since rusqlite is no longer a core dependency
 
 #[cfg(test)]
 mod tests {
@@ -229,26 +209,22 @@ mod tests {
     }
 
     #[test]
-    fn test_error_conversion_logic() {
-        // Test the conversion logic by checking error patterns
-        // This tests the From implementation without creating actual rusqlite errors
+    fn test_error_types() {
+        // Test that all error variants can be created and displayed
+        let errors = vec![
+            NonceError::DuplicateNonce,
+            NonceError::ExpiredNonce,
+            NonceError::InvalidSignature,
+            NonceError::TimestampOutOfWindow,
+            NonceError::DatabaseError("test".to_string()),
+            NonceError::CryptoError("test".to_string()),
+        ];
 
-        // Test that UNIQUE constraint errors would be converted to DuplicateNonce
-        let unique_error = rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
-            Some("UNIQUE constraint failed".to_string()),
-        );
-
-        match NonceError::from(unique_error) {
-            NonceError::DuplicateNonce => {}
-            _ => panic!("Expected DuplicateNonce error"),
-        }
-
-        // Test that other errors would be converted to DatabaseError
-        let other_error = rusqlite::Error::SqliteSingleThreadedMode;
-        match NonceError::from(other_error) {
-            NonceError::DatabaseError(_) => {}
-            _ => panic!("Expected DatabaseError"),
+        for error in errors {
+            // Each error should have a non-empty string representation
+            assert!(!error.to_string().is_empty());
+            // Each error should be debug-printable
+            assert!(!format!("{error:?}").is_empty());
         }
     }
 }

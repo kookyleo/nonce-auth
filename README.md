@@ -6,48 +6,48 @@
 [![Documentation](https://docs.rs/nonce-auth/badge.svg)](https://docs.rs/nonce-auth)
 [![License](https://img.shields.io/crates/l/nonce-auth.svg)](https://github.com/kookyleo/nonce-auth#license)
 
-A Rust-based secure nonce authentication library that provides one-time token (nonce) generation, signing, and verification functionality to effectively prevent replay attacks.
+A Rust-based secure nonce authentication library that provides generation, signing, and validation of one-time tokens (nonces) to effectively prevent replay attacks.
 
 ## Features
 
-- 🔐 **HMAC-SHA256 Signing** - Cryptographic signing of requests using shared secrets
-- ⏰ **Timestamp Window Validation** - Prevents replay attacks from expired requests
+- 🔐 **HMAC-SHA256 Signing** - Cryptographic signing of requests using shared keys
+- ⏰ **Time Window Validation** - Prevents replay attacks from expired requests
 - 🔑 **One-time Nonce** - Ensures each nonce can only be used once
-- 💾 **SQLite Persistence** - Automatic nonce storage and cleanup management
-- 🎯 **Context Isolation** - Support for nonce isolation across different business scenarios
+- 💾 **Pluggable Storage** - Support for memory, SQLite, Redis, or custom storage backends
+- 🎯 **Context Isolation** - Support for isolated nonces across different business scenarios
 - 🚀 **Async Support** - Fully asynchronous API design
 - 🛡️ **Security Protection** - Constant-time comparison to prevent timing attacks
-- 📦 **Client-Server Separation** - Clean separation of client and server responsibilities
-- 🔧 **Flexible Signature Algorithm** - Customizable signature data construction
+- 📦 **Client-Server Separation** - Clear separation of client and server responsibilities
+- 🔧 **Flexible Signature Algorithms** - Customizable signature data construction through closures
 
 ## Architecture
 
 ### Client-Server Separation Design
 
-The library provides two independent managers for clear separation of responsibilities:
+The library provides two independent managers with clear separation of responsibilities:
 
-#### `NonceClient` - Client-side Manager
+#### `NonceClient` - Client Manager
 - Responsible for generating signed authentication data
 - No database dependencies required
 - Lightweight design suitable for client-side use
-- Flexible signature algorithm through closures
+- Flexible signature algorithms through closures
 
-#### `NonceServer` - Server-side Manager  
+#### `NonceServer` - Server Manager
 - Responsible for verifying signed authentication data
-- Manages nonce storage and cleanup
-- Includes timestamp validation and replay attack prevention
+- Manages nonce storage and cleanup with pluggable backends
+- Includes timestamp validation and replay attack prevention mechanisms
 - Supports context isolation for different business scenarios
 
-### Parameter Explanation
+### Parameters
 
-- `default_ttl`: Nonce time-to-live, representing the duration from generation to expiration, defaults to 5 minutes
-- `time_window`: Timestamp validation window, defaults to 1 minute
+- `default_ttl`: Validity period of nonce, time from generation to expiration, default 5 minutes
+- `time_window`: Timestamp validation window, default 1 minute
 
 Both work together to prevent replay attacks.
 
-### Important Notes
+### Notes
 
-- The server uses local SQLite for nonce persistence, please consider using with connection sticky policies
+- The server uses pluggable storage backends - choose the appropriate backend for your deployment scenario
 - Signature algorithms are fully customizable through closures for maximum flexibility
 
 ## Quick Start
@@ -56,7 +56,7 @@ Both work together to prevent replay attacks.
 
 ```toml
 [dependencies]
-nonce-auth = "0.2.0"
+nonce-auth = "0.4.0"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -68,7 +68,8 @@ hmac = "0.12"
 
 ```rust
 use hmac::Mac;
-use nonce_auth::{NonceClient, NonceServer};
+use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -76,13 +77,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pre-shared key between client and server
     let psk = b"my-secret-key";
 
+    // Create storage backend
+    let storage = Arc::new(MemoryStorage::new());
+    
     // Initialize server
-    NonceServer::init().await?;
     let server = NonceServer::new(
         psk,
-        Some(Duration::from_secs(300)), // 5 minutes TTL for nonce storage
-        Some(Duration::from_secs(60)),  // 1 minute time window for timestamp validation
+        storage,
+        Some(Duration::from_secs(300)), // 5 minutes nonce storage TTL
+        Some(Duration::from_secs(60)),  // 1 minute timestamp validation window
     );
+    
+    // Initialize the server
+    server.init().await?;
 
     // Initialize client
     let client = NonceClient::new(psk);
@@ -92,9 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mac.update(timestamp.as_bytes());
         mac.update(nonce.as_bytes());
     })?;
-    println!("Generated authentication data: {protection_data:?}");
+    println!("Generated protection data: {protection_data:?}");
 
-    // Server verifies the authentication data with matching signature algorithm
+    // Server verifies authentication data using matching signature algorithm
     match server
         .verify_protection_data(&protection_data, None, |mac| {
             mac.update(protection_data.timestamp.to_string().as_bytes());
@@ -102,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await
     {
-        Ok(()) => println!("✅ Authentication verified successfully"),
+        Ok(()) => println!("✅ Authentication verification successful"),
         Err(e) => println!("❌ Authentication verification failed: {e:?}"),
     }
 
@@ -145,7 +152,7 @@ class NonceClient {
             signature
         };
         
-        // Save the last request for repeating
+        // Save last request for replay testing
         this.lastRequest = { message, auth: {...request} };
         
         return {
@@ -172,7 +179,7 @@ class NonceClient {
                 .map(b => b.toString(16).padStart(2, '0'))
                 .join('');
         } catch (error) {
-            console.error('Signing failed:', error);
+            console.error('Signature failed:', error);
             throw error;
         }
     }
@@ -202,10 +209,14 @@ async function makeAuthenticatedRequest() {
             body: JSON.stringify(requestData)
         });
         
-        const result = await response.json();
-        console.log('Server response:', result);
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Response:', result);
+        } else {
+            console.error('Request failed:', response.status);
+        }
     } catch (error) {
-        console.error('Request failed:', error);
+        console.error('Request error:', error);
     }
 }
 ```
@@ -214,122 +225,96 @@ async function makeAuthenticatedRequest() {
 
 ```rust
 // server.rs
-use hmac::Mac;
-use nonce_auth::NonceServer;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use nonce_auth::{NonceServer, storage::MemoryStorage};
 use std::sync::Arc;
-use std::time::Duration;
 use warp::Filter;
+use serde::{Deserialize, Serialize};
+use hmac::Mac;
 
 #[derive(Deserialize)]
-struct AuthenticatedRequest {
+struct AuthData {
+    timestamp: u64,
+    nonce: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct ProtectedRequest {
     payload: String,
     session_id: String,
-    auth: nonce_auth::ProtectionData,
+    auth: AuthData,
 }
 
 #[derive(Serialize)]
 struct ApiResponse {
     success: bool,
     message: String,
-    data: Option<String>,
+    echo: Option<String>,
 }
-
-// Store PSKs for each session
-type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
 
 #[tokio::main]
 async fn main() {
-    // Initialize the nonce server database
-    NonceServer::init()
-        .await
-        .expect("Failed to initialize database");
+    // Create storage backend (you can use SQLite, Redis, etc.)
+    let storage = Arc::new(MemoryStorage::new());
+    
+    // Create server
+    let server = NonceServer::new(
+        b"shared-secret-key",
+        storage,
+        None, // Use default TTL
+        None, // Use default time window
+    );
+    
+    // Initialize server
+    server.init().await.expect("Failed to initialize server");
+    
+    let server = Arc::new(server);
 
-    // Create PSK store
-    let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
-
-    // Serve index.html at the root path with embedded PSK
-    let psk_store_filter = warp::any().map(move || psk_store.clone());
-    let index_route = warp::path::end()
-        .and(psk_store_filter.clone())
-        .and_then(handle_index_request);
-
-    // Protected API route
-    let protected_route = warp::path("api")
+    // Create API route
+    let api = warp::path("api")
         .and(warp::path("protected"))
         .and(warp::post())
         .and(warp::body::json())
-        .and(psk_store_filter)
+        .and(warp::any().map(move || server.clone()))
         .and_then(handle_protected_request);
 
-    // Combine routes
-    let routes = index_route.or(protected_route).with(
-        warp::cors()
-            .allow_any_origin()
-            .allow_headers(vec!["content-type"])
-            .allow_methods(vec!["GET", "POST"]),
-    );
-
-    println!("Server running on http://localhost:3000");
-    println!("Open this URL in your browser to test the authentication");
-    println!("Each page refresh will generate a new PSK");
-
-    warp::serve(routes).run(([127, 0, 0, 1], 3000)).await;
+    // Start server
+    println!("Server running on http://127.0.0.1:3030");
+    warp::serve(api)
+        .run(([127, 0, 0, 1], 3030))
+        .await;
 }
 
 async fn handle_protected_request(
-    req: AuthenticatedRequest,
-    psk_store: PskStore,
+    req: ProtectedRequest,
+    server: Arc<NonceServer<MemoryStorage>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    // Get the PSK from store using session ID
-    let psk = {
-        let store = psk_store.lock().unwrap();
-        println!("Looking for session ID: {}", req.session_id);
-        store.get(&req.session_id).cloned()
+    // Create protection data from request
+    let protection_data = nonce_auth::ProtectionData {
+        timestamp: req.auth.timestamp,
+        nonce: req.auth.nonce,
+        signature: req.auth.signature,
     };
 
-    let psk = match psk {
-        Some(psk) => psk,
-        None => {
-            let response = ApiResponse {
-                success: false,
-                message: "Invalid session ID. Please refresh the page.".to_string(),
-                data: None,
-            };
-            return Ok(warp::reply::json(&response));
-        }
-    };
-
-    // Create server with PSK
-    let server = NonceServer::new(
-        psk.as_bytes(),
-        Some(Duration::from_secs(60)), // 1 minute TTL
-        Some(Duration::from_secs(15)), // 15 seconds time window
-    );
-
-    // Verify the request with custom signature including payload
-    match server
-        .verify_protection_data(&req.auth, None, |mac| {
-            mac.update(req.auth.timestamp.to_string().as_bytes());
-            mac.update(req.auth.nonce.as_bytes());
-            mac.update(req.payload.as_bytes());
-        })
-        .await
-    {
+    // Verify authentication data
+    match server.verify_protection_data(&protection_data, Some(&req.session_id), |mac| {
+        mac.update(protection_data.timestamp.to_string().as_bytes());
+        mac.update(protection_data.nonce.as_bytes());
+        mac.update(req.payload.as_bytes());
+    }).await {
         Ok(()) => {
             let response = ApiResponse {
                 success: true,
-                message: "Request authenticated successfully".to_string(),
-                data: Some(format!("Processed: {}", req.payload)),
+                message: "Authentication successful".to_string(),
+                echo: Some(req.payload),
             };
             Ok(warp::reply::json(&response))
         }
         Err(e) => {
             let response = ApiResponse {
                 success: false,
-                message: format!("Authentication failed: {e:?}"),
-                data: None,
+                message: format!("Authentication failed: {e}"),
+                echo: None,
             };
             Ok(warp::reply::json(&response))
         }
@@ -337,147 +322,114 @@ async fn handle_protected_request(
 }
 ```
 
-## Example Authentication Flow Sequence Diagram
+## Storage Backends
 
-```mermaid
-sequenceDiagram
-    participant Browser as Web Browser
-    participant RustServer as Rust Server
-    participant DB as SQLite Database
+The library supports multiple storage backends through the `NonceStorage` trait:
 
-    Note over Browser, DB: Session-based Authentication Flow
+### Built-in Storage Backends
 
-    Browser->>RustServer: 1. GET / (page request)
-    RustServer->>RustServer: 2. Generate random PSK and session ID
-    RustServer->>RustServer: 3. Store PSK with session ID
-    RustServer->>Browser: 4. HTML with embedded PSK and session ID
-    
-    Browser->>Browser: 5. User enters payload
-    Browser->>Browser: 6. Generate UUID nonce
-    Browser->>Browser: 7. Create timestamp
-    Browser->>Browser: 8. Sign (timestamp + nonce + payload) with HMAC-SHA256
-    
-    Browser->>RustServer: 9. POST /api/protected<br/>{payload, session_id, auth: {timestamp, nonce, signature}}
-    
-    RustServer->>RustServer: 10. Lookup PSK by session_id
-    
-    alt Invalid session ID
-        RustServer-->>Browser: 401 Invalid session ID
-    end
-    
-    RustServer->>RustServer: 11. Create NonceServer with PSK
-    RustServer->>RustServer: 12. Verify timestamp within window
-    
-    alt Timestamp out of window
-        RustServer-->>Browser: 401 Timestamp expired
-    end
-    
-    RustServer->>RustServer: 13. Verify HMAC signature
-    
-    alt Invalid signature
-        RustServer-->>Browser: 401 Invalid signature
-    end
-    
-    RustServer->>DB: 14. Check if nonce exists
-    
-    alt Nonce already used
-        RustServer-->>Browser: 401 Duplicate nonce
-    end
-    
-    RustServer->>DB: 15. Store nonce
-    RustServer->>RustServer: 16. Process business logic
-    RustServer-->>Browser: 200 Success response
-    
-    Note over RustServer, DB: Background cleanup
-    RustServer->>DB: Cleanup expired nonces as needed
+#### Memory Storage
+```rust
+use nonce_auth::storage::MemoryStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(MemoryStorage::new());
 ```
 
-## API Documentation
+**Features:**
+- Fast in-memory storage using HashMap
+- Thread-safe with Arc<Mutex<HashMap>>
+- Suitable for single-instance applications
+- No persistence across restarts
 
-### NonceClient
+### Custom Storage Backends
 
-#### Constructor
+#### SQLite Storage
+See `examples/sqlite_storage.rs` for a complete implementation:
 
 ```rust
-pub fn new(secret: &[u8]) -> Self
+use nonce_auth::examples::SqliteStorage;
+use std::sync::Arc;
+
+let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
 ```
 
-- `secret`: Secret key used for signing
-
-#### Methods
-
-##### Create Authentication Data
-
+#### Redis Storage (Example)
 ```rust
-pub fn create_protection_data<F>(&self, signature_builder: F) -> Result<ProtectionData, NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
-```
+// You can implement Redis storage similarly
+pub struct RedisStorage {
+    client: redis::Client,
+}
 
-Generates authentication data with custom signature algorithm. The closure receives the MAC instance, timestamp string, and nonce string.
-
-##### Generate Signature
-
-```rust
-pub fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
-```
-
-Generates HMAC-SHA256 signature with custom data builder.
-
-### NonceServer
-
-#### Constructor
-
-```rust
-pub fn new(
-    secret: &[u8], 
-    default_ttl: Option<Duration>, 
-    time_window: Option<Duration>
-) -> Self
-```
-
-- `secret`: Secret key used for verification
-- `default_ttl`: Default nonce expiration time (default: 5 minutes)
-- `time_window`: Allowed time window for timestamp validation (default: 1 minute)
-
-#### Methods
-
-##### Verify Authentication Data
-
-```rust
-pub async fn verify_protection_data<F>(
-    &self, 
-    protection_data: &ProtectionData, 
-    context: Option<&str>,
-    signature_builder: F,
-) -> Result<(), NonceError>
-where
-    F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
-```
-
-Verifies authentication data with custom signature algorithm. The closure should match the one used on the client side.
-
-##### Initialize Database
-
-```rust
-pub async fn init() -> Result<(), NonceError>
-```
-
-Creates necessary database tables and indexes.
-
-### ProtectionData
-
-```rust
-pub struct ProtectionData {
-    pub timestamp: u64,    // Unix timestamp
-    pub nonce: String,     // UUID format one-time token
-    pub signature: String, // HMAC-SHA256 signature
+#[async_trait]
+impl NonceStorage for RedisStorage {
+    // Implementation details...
 }
 ```
 
-### Error Types
+## Sequence Diagrams
+
+### Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant Storage as Storage Backend
+
+    Client->>Client: Generate timestamp + nonce
+    Client->>Client: Create HMAC signature
+    Client->>Server: Send signed request
+    Server->>Storage: Check nonce existence
+    Storage-->>Server: Nonce not found (OK)
+    Server->>Server: Verify signature
+    Server->>Server: Validate timestamp window
+    Server->>Storage: Store nonce with TTL
+    Storage-->>Server: Nonce stored
+    Server-->>Client: Authentication successful
+```
+
+### Replay Attack Prevention
+
+```mermaid
+sequenceDiagram
+    participant Attacker
+    participant Server
+    participant Storage as Storage Backend
+
+    Attacker->>Server: Replay previous request
+    Server->>Storage: Check nonce existence
+    Storage-->>Server: Nonce already exists
+    Server-->>Attacker: Authentication failed (duplicate nonce)
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Security Configuration
+export NONCE_AUTH_DEFAULT_TTL=300                  # Default TTL (seconds)
+export NONCE_AUTH_DEFAULT_TIME_WINDOW=60           # Time window (seconds)
+```
+
+### Programmatic Configuration
+
+```rust
+use nonce_auth::{NonceServer, storage::MemoryStorage};
+use std::sync::Arc;
+use std::time::Duration;
+
+let storage = Arc::new(MemoryStorage::new());
+let server = NonceServer::new(
+    b"your-secret-key",
+    storage,
+    Some(Duration::from_secs(600)),  // Custom TTL
+    Some(Duration::from_secs(120)),  // Custom time window
+);
+```
+
+## Error Types
 
 ```rust
 pub enum NonceError {
@@ -485,7 +437,7 @@ pub enum NonceError {
     ExpiredNonce,           // Nonce expired
     InvalidSignature,       // Invalid signature
     TimestampOutOfWindow,   // Timestamp outside allowed window
-    DatabaseError(String),  // Database error
+    DatabaseError(String),  // Storage backend error
     CryptoError(String),    // Cryptographic error
 }
 ```
@@ -533,23 +485,24 @@ pub enum NonceError {
 ## Performance Optimization
 
 - Automatic background cleanup of expired nonce records
-- Database index optimization for query performance
+- Pluggable storage backends for optimal performance
 - Asynchronous design supports high-concurrency scenarios
 
 ## Dependencies
 
 - `hmac` - HMAC signing
 - `sha2` - SHA256 hashing
-- `rusqlite` - SQLite database library
 - `uuid` - UUID generation
-- `serde` - Serialization support
+- `async-trait` - Async trait support
 - `tokio` - Async runtime
-- `thiserror` - Error handling
+
+Storage backends may have additional dependencies (e.g., `rusqlite` for SQLite storage).
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of
 
-## Contributing
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-Issues and Pull Requests are welcome!
+at your option.
