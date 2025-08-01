@@ -28,8 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Create the server with a storage backend.
     let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::new(secret, storage, None, None);
-    server.init().await?;
+    let server = NonceServer::builder(secret, storage)
+        .build_and_init()
+        .await?;
 
     // 3. Create the client and generate a credential for the payload.
     let client = NonceClient::new(secret);

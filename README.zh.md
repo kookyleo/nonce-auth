@@ -28,8 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. 创建服务端和存储后端
     let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::new(secret, storage, None, None);
-    server.init().await?;
+    let server = NonceServer::builder(secret, storage)
+        .build_and_init()
+        .await?;
 
     // 3. 创建客户端，并为业务数据生成凭证
     let client = NonceClient::new(secret);

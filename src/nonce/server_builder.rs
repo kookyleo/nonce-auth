@@ -47,12 +47,7 @@ impl<S: NonceStorage> NonceServerBuilder<S> {
     /// This method consumes the builder and returns a fully configured and initialized server.
     /// It automatically calls the storage backend's `init()` method.
     pub async fn build_and_init(self) -> Result<NonceServer<S>, NonceError> {
-        let server = NonceServer::new(
-            &self.secret,
-            self.storage,
-            self.ttl,
-            self.time_window,
-        );
+        let server = NonceServer::new(&self.secret, self.storage, self.ttl, self.time_window);
         server.init().await?;
         Ok(server)
     }

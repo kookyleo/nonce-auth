@@ -2,7 +2,7 @@ use hmac::Mac;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{CredentialVerifier, NonceError, NonceStorage, NonceServerBuilder};
+use super::{CredentialVerifier, NonceError, NonceServerBuilder, NonceStorage};
 use crate::{HmacSha256, NonceCredential};
 
 /// A server that verifies `NonceCredential`s and manages nonce storage.
@@ -70,7 +70,11 @@ impl<S: NonceStorage> NonceServer<S> {
     }
 
     /// Verifies the HMAC signature using the provided data builder.
-    pub(crate) fn verify_signature<F>(&self, signature: &str, data_builder: F) -> Result<(), NonceError>
+    pub(crate) fn verify_signature<F>(
+        &self,
+        signature: &str,
+        data_builder: F,
+    ) -> Result<(), NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
     {
