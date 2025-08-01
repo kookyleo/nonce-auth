@@ -4,22 +4,18 @@ This document provides a reference for all configuration options available in `n
 
 ## Server Configuration
 
-Configuration for the `NonceServer` is done via the `NonceServer::new` function, which accepts optional `Duration` values for TTL and time window.
+Configuration for the `NonceServer` is done via the builder pattern, which allows customization of TTL and time window.
 
 ```rust
-use nonce_auth::{NonceServer, storage::MemoryStorage};
-use std::sync::Arc;
+use nonce_auth::NonceServer;
 use std::time::Duration;
 
-let storage = Arc::new(MemoryStorage::new());
-
 // Example: Custom TTL of 10 minutes and a time window of 2 minutes.
-let server = NonceServer::new(
-    b"your-secret-key",
-    storage,
-    Some(Duration::from_secs(600)),  // Custom TTL
-    Some(Duration::from_secs(120)),  // Custom time window
-);
+let server = NonceServer::builder(b"your-secret-key")
+    .with_ttl(Duration::from_secs(600))         // Custom TTL
+    .with_time_window(Duration::from_secs(120)) // Custom time window
+    .build_and_init()
+    .await?;
 ```
 
 - **`default_ttl`**: `Option<Duration>`
@@ -49,13 +45,15 @@ The library uses a trait-based storage system. You can use the built-in `MemoryS
 
 ### Memory Storage (Default)
 
-Ideal for testing, examples, or single-instance applications where persistence is not required.
+The default storage backend is `MemoryStorage`, which is automatically used when you create a server with `NonceServer::builder()`. This is ideal for testing, examples, or single-instance applications where persistence is not required.
 
 ```rust
-use nonce_auth::storage::MemoryStorage;
-use std::sync::Arc;
+use nonce_auth::NonceServer;
 
-let storage = Arc::new(MemoryStorage::new());
+// Uses MemoryStorage by default
+let server = NonceServer::builder(b"your-secret-key")
+    .build_and_init()
+    .await?;
 ```
 
 ### Custom Storage (e.g., SQLite, Redis)
@@ -81,4 +79,10 @@ impl NonceStorage for MyCustomStorage {
     # async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> { todo!() }
     # async fn get_stats(&self) -> Result<StorageStats, NonceError> { todo!() }
 }
+
+// Use the custom storage with the builder
+let server = NonceServer::builder(b"your-secret-key")
+    .with_storage(Arc::new(MyCustomStorage))
+    .build_and_init()
+    .await?;
 ```

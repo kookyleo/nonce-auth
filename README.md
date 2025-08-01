@@ -16,42 +16,38 @@ A lightweight, secure nonce-based authentication library for Rust, designed to p
 ## Quick Start
 
 ```rust
-use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
-use std::sync::Arc;
-use std::time::Duration;
+use nonce_auth::{NonceClient, NonceServer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Shared secret and a payload to protect.
+    // Shared secret between client and server
     let secret = b"my-super-secret-key";
     let payload = b"important_api_request_data";
 
-    // 2. Create the server with a storage backend.
-    let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::builder(secret, storage)
+    // Create server (defaults to in-memory storage)
+    let server = NonceServer::builder(secret)
         .build_and_init()
         .await?;
 
-    // 3. Create the client and generate a credential for the payload.
+    // Create client and generate a credential
     let client = NonceClient::new(secret);
     let credential = client.credential_builder().sign(payload)?;
-    println!("Generated credential: {:?}", credential);
 
-    // 4. The server verifies the credential using the standard, symmetric method.
-    let verification_result = server
+    // Server verifies the credential
+    let result = server
         .credential_verifier(&credential)
         .verify(payload)
         .await;
-
-    assert!(verification_result.is_ok());
+    
+    assert!(result.is_ok());
     println!("✅ First verification successful!");
 
-    // 5. Attempting to use the same credential again will fail.
+    // Replay attack is automatically rejected
     let replay_result = server
         .credential_verifier(&credential)
         .verify(payload)
         .await;
-
+    
     assert!(replay_result.is_err());
     println!("✅ Replay attack correctly rejected!");
 

@@ -7,7 +7,7 @@
 
 一个轻量、安全的 nonce 认证库，专为 Rust 设计，旨在有效防止 API 和其他服务中的重放攻击。
 
-##核心特性
+## 核心特性
 
 - **防重放攻击**: 结合使用 Nonce、时间戳和 HMAC-SHA256 签名，确保每个请求的唯一性和真实性。
 - **安全且易用的 API**: 采用构建者模式 (`credential_builder`)，引导开发者安全使用，避免常见的安全陷阱。
@@ -16,42 +16,38 @@
 ## 快速上手
 
 ```rust
-use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
-use std::sync::Arc;
-use std::time::Duration;
+use nonce_auth::{NonceClient, NonceServer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. 共享密钥和需要保护的业务数据
+    // 客户端与服务端的共享密钥
     let secret = b"my-super-secret-key";
     let payload = b"important_api_request_data";
 
-    // 2. 创建服务端和存储后端
-    let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::builder(secret, storage)
+    // 创建服务端（默认使用内存存储）
+    let server = NonceServer::builder(secret)
         .build_and_init()
         .await?;
 
-    // 3. 创建客户端，并为业务数据生成凭证
+    // 创建客户端并生成凭证
     let client = NonceClient::new(secret);
     let credential = client.credential_builder().sign(payload)?;
-    println!("生成的凭证: {:?}", credential);
 
-    // 4. 服务端使用标准的、对称的方法验证凭证
-    let verification_result = server
+    // 服务端验证凭证
+    let result = server
         .credential_verifier(&credential)
         .verify(payload)
         .await;
-
-    assert!(verification_result.is_ok());
+    
+    assert!(result.is_ok());
     println!("✅ 首次验证成功!");
 
-    // 5. 再次使用相同的凭证将会失败
+    // 重放攻击会被自动拒绝
     let replay_result = server
         .credential_verifier(&credential)
         .verify(payload)
         .await;
-
+    
     assert!(replay_result.is_err());
     println!("✅ 成功拒绝重放攻击!");
 
