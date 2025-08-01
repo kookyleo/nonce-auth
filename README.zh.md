@@ -1,5 +1,7 @@
 # Nonce Auth
 
+![Nonce Auth Banner](docs/banner.png)
+
 [![CI](https://github.com/kookyleo/nonce-auth/workflows/CI/badge.svg)](https://github.com/kookyleo/nonce-auth/actions)
 [![Crates.io](https://img.shields.io/crates/v/nonce-auth.svg)](https://crates.io/crates/nonce-auth)
 [![Documentation](https://docs.rs/nonce-auth/badge.svg)](https://docs.rs/nonce-auth)
