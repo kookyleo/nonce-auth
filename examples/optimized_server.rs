@@ -61,19 +61,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut successful_auths = 0;
 
     for i in 0..100 {
-        // Create protection data with additional payload
-        let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-            mac.update(timestamp.as_bytes());
-            mac.update(nonce.as_bytes());
-            mac.update(format!("request_{i}").as_bytes());
-        })?;
+        // Create a credential with additional payload
+        let payload = format!("request_{i}").into_bytes();
+        let credential = client.credential_builder().sign(&payload)?;
 
-        // Verify protection data with context
+        // Verify the credential with context
         match server
-            .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
-                mac.update(protection_data.timestamp.to_string().as_bytes());
-                mac.update(protection_data.nonce.as_bytes());
-                mac.update(format!("request_{i}").as_bytes());
+            .credential_verifier(&credential)
+            .with_context(Some("api_v1"))
+            .verify_with(|mac| {
+                mac.update(credential.timestamp.to_string().as_bytes());
+                mac.update(credential.nonce.as_bytes());
+                mac.update(&payload);
             })
             .await
         {
@@ -116,19 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Context isolation demonstration
     println!("=== Context Isolation Demonstration ===\n");
 
-    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-        mac.update(timestamp.as_bytes());
-        mac.update(nonce.as_bytes());
-    })?;
+    let payload = b"context_payload";
+    let credential = client.credential_builder().sign(payload)?;
 
     // Same nonce should work in different contexts
     let contexts = ["api_v1", "api_v2", "admin_panel"];
     for context in contexts {
         match server
-            .verify_protection_data(&protection_data, Some(context), |mac| {
-                mac.update(protection_data.timestamp.to_string().as_bytes());
-                mac.update(protection_data.nonce.as_bytes());
-            })
+            .credential_verifier(&credential)
+            .with_context(Some(context))
+            .verify(payload)
             .await
         {
             Ok(()) => println!("✓ Nonce accepted in context: {context}"),
@@ -138,10 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try to reuse in the same context (should fail)
     match server
-        .verify_protection_data(&protection_data, Some("api_v1"), |mac| {
-            mac.update(protection_data.timestamp.to_string().as_bytes());
-            mac.update(protection_data.nonce.as_bytes());
-        })
+        .credential_verifier(&credential)
+        .with_context(Some("api_v1"))
+        .verify(payload)
         .await
     {
         Ok(()) => println!("❌ This should not happen - nonce reuse detected"),

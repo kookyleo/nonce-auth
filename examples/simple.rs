@@ -1,4 +1,3 @@
-use hmac::Mac;
 use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,31 +24,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize client
     let client = NonceClient::new(psk);
 
-    // Client generates authentication data with custom signature (timestamp + nonce)
-    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-        mac.update(timestamp.as_bytes());
-        mac.update(nonce.as_bytes());
-    })?;
-    println!("Generated authentication data: {protection_data:?}");
+    // Client generates a credential for a given payload
+    let payload = b"my_important_request_payload";
+    let credential = client.credential_builder().sign(payload)?;
+    println!("Generated credential: {credential:?}");
 
-    // Server verifies the authentication data with matching signature algorithm
+    // Server verifies the credential using the standard method
     match server
-        .verify_protection_data(&protection_data, None, |mac| {
-            mac.update(protection_data.timestamp.to_string().as_bytes());
-            mac.update(protection_data.nonce.as_bytes());
-        })
+        .credential_verifier(&credential)
+        .verify(payload)
         .await
     {
         Ok(()) => println!("✅ Authentication verified successfully"),
         Err(e) => println!("❌ Authentication verification failed: {e:?}"),
     }
 
-    // Try to use the same nonce again (should fail)
+    // Try to use the same credential again (should fail)
     match server
-        .verify_protection_data(&protection_data, None, |mac| {
-            mac.update(protection_data.timestamp.to_string().as_bytes());
-            mac.update(protection_data.nonce.as_bytes());
-        })
+        .credential_verifier(&credential)
+        .verify(payload)
         .await
     {
         Ok(()) => println!("❌ This should not happen - nonce reuse detected"),

@@ -23,16 +23,19 @@ use thiserror::Error;
 /// let server = NonceServer::new(b"secret", storage, None, None);
 /// server.init().await?;
 /// let client = NonceClient::new(b"secret");
-/// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-///     mac.update(timestamp.as_bytes());
-///     mac.update(nonce.as_bytes());
-/// })?;
+/// let payload = b"test payload";
+/// let credential = client.credential_builder().sign(payload)?;
 ///
 /// // Handle different error types
-/// match server.verify_protection_data(&protection_data, None, |mac| {
-///     mac.update(protection_data.timestamp.to_string().as_bytes());
-///     mac.update(protection_data.nonce.as_bytes());
-/// }).await {
+/// match server
+///     .credential_verifier(&credential)
+///     .verify_with(|mac| {
+///         mac.update(credential.timestamp.to_string().as_bytes());
+///         mac.update(credential.nonce.as_bytes());
+///         mac.update(payload);
+///     })
+///     .await
+/// {
 ///     Ok(()) => println!("Request verified"),
 ///     Err(NonceError::DuplicateNonce) => println!("Nonce already used"),
 ///     Err(NonceError::InvalidSignature) => println!("Invalid signature"),

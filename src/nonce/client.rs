@@ -1,136 +1,109 @@
 use hmac::Mac;
+use std::marker::PhantomData;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::NonceError;
-use crate::HmacSha256;
-use crate::ProtectionData;
+use crate::{HmacSha256, NonceCredential};
 
-/// Client-side nonce manager for generating signed requests.
+/// A client for generating cryptographically signed `NonceCredential`s.
 ///
-/// The `NonceClient` is responsible for creating cryptographically signed
-/// requests that can be verified by a `NonceServer`. It provides a lightweight,
-/// stateless interface for generating nonces and signatures without requiring
-/// any database or persistent storage.
-///
-/// # Security Features
-///
-/// - **HMAC-SHA256 Signing**: Uses industry-standard HMAC with SHA256 for signatures
-/// - **UUID Nonces**: Generates cryptographically random UUIDs for nonces
-/// - **Timestamp Inclusion**: Includes current timestamp to prevent old request replay
-/// - **Stateless Design**: No local state or storage required
-/// - **Fully Customizable**: All signature algorithms are defined by the application
-///
-/// # Usage Pattern
-///
-/// The typical usage pattern is:
-/// 1. Create a client with a shared secret
-/// 2. Generate signed requests with custom signature algorithms
-/// 3. Send the signed request to the server for verification
+/// This client is stateless and responsible for creating credentials that can be
+/// verified by a `NonceServer`.
 ///
 /// # Example
 ///
 /// ```rust
 /// use nonce_auth::NonceClient;
-/// use hmac::Mac;
+/// use hmac::Mac; // Trait for `mac.update()`
 ///
-/// // Create a client with a shared secret
-/// let client = NonceClient::new(b"my_shared_secret");
+/// let client = NonceClient::new(b"my_secret");
+/// let payload = b"some_data_to_protect";
 ///
-/// // Generate a signed request with custom signature
-/// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-///     mac.update(timestamp.as_bytes());
+/// // Standard usage:
+/// let credential = client.credential_builder().sign(payload).unwrap();
+///
+/// // Advanced usage:
+/// let custom_credential = client.credential_builder().sign_with(|mac, ts, nonce| {
+///     mac.update(ts.as_bytes());
 ///     mac.update(nonce.as_bytes());
-///     mac.update(b"custom_payload");
+///     mac.update(payload);
 /// }).unwrap();
 /// ```
-///
-/// # Thread Safety
-///
-/// `NonceClient` is thread-safe and can be shared across multiple threads
-/// or used concurrently to generate multiple signed requests.
 pub struct NonceClient {
-    /// The secret key used for HMAC signature generation.
-    /// This should be the same secret used by the corresponding `NonceServer`.
     secret: Vec<u8>,
 }
 
 impl NonceClient {
-    /// Creates a new `NonceClient` with the specified secret key.
-    ///
-    /// The secret key should be shared between the client and server
-    /// and kept confidential. It's used to generate HMAC signatures
-    /// that prove the authenticity of requests.
-    ///
-    /// # Arguments
-    ///
-    /// * `secret` - The secret key for HMAC signature generation.
-    ///   This should match the secret used by the server.
-    ///
-    /// # Returns
-    ///
-    /// A new `NonceClient` instance ready to generate signed requests.
-    ///
-    /// # Security Considerations
-    ///
-    /// - Use a cryptographically strong secret key (at least 32 bytes recommended)
-    /// - Keep the secret key confidential and secure
-    /// - Use the same secret key on both client and server
-    /// - Consider rotating secret keys periodically
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use nonce_auth::NonceClient;
-    ///
-    /// // Create with a strong secret key
-    /// let secret = b"my_very_secure_secret_key_32_bytes";
-    /// let client = NonceClient::new(secret);
-    ///
-    /// // Or use a dynamically generated secret
-    /// let dynamic_secret = "generated_secret_from_key_exchange".as_bytes();
-    /// let client = NonceClient::new(dynamic_secret);
-    /// ```
+    /// Creates a new `NonceClient` with the specified shared secret.
     pub fn new(secret: &[u8]) -> Self {
         Self {
             secret: secret.to_vec(),
         }
     }
 
-    /// Generates protection data with custom signature algorithm.
+    /// Returns a builder to construct and sign a `NonceCredential`.
     ///
-    /// This method provides complete flexibility to create protection data with
-    /// any signature algorithm. The signature algorithm is defined by the closure
-    /// which receives the MAC instance, timestamp, and nonce.
+    /// This is the recommended entry point for creating credentials.
+    pub fn credential_builder(&self) -> NonceCredentialBuilder {
+        NonceCredentialBuilder::new(self)
+    }
+
+    /// Low-level function to generate a signature. Used internally by the builder.
+    fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
+    where
+        F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
+    {
+        let mut mac = HmacSha256::new_from_slice(&self.secret)
+            .map_err(|e| NonceError::CryptoError(e.to_string()))?;
+        data_builder(&mut mac);
+        let result = mac.finalize();
+        Ok(hex::encode(result.into_bytes()))
+    }
+}
+
+/// A builder for creating a `NonceCredential`.
+///
+/// This builder provides a safe and ergonomic API for signing data.
+pub struct NonceCredentialBuilder<'a> {
+    client: &'a NonceClient,
+    _phantom: PhantomData<()>,
+}
+
+impl<'a> NonceCredentialBuilder<'a> {
+    fn new(client: &'a NonceClient) -> Self {
+        Self {
+            client,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Signs the standard components (`timestamp`, `nonce`) plus a payload.
+    ///
+    /// This is the recommended method for most use cases, as it ensures the payload
+    /// is always included in the signature.
     ///
     /// # Arguments
     ///
-    /// * `signature_builder` - A closure that defines how to build the signature data
+    /// * `payload`: The business data to include in the signature.
+    pub fn sign(self, payload: &[u8]) -> Result<NonceCredential, NonceError> {
+        self.sign_with(|mac, timestamp, nonce| {
+            mac.update(timestamp.as_bytes());
+            mac.update(nonce.as_bytes());
+            mac.update(payload);
+        })
+    }
+
+    /// Signs the credential using custom logic defined in a closure for advanced use cases.
     ///
-    /// # Returns
+    /// # Warning
     ///
-    /// * `Ok(ProtectionData)` - Authentication data with custom signature
-    /// * `Err(NonceError)` - If there's an error in the cryptographic operations
+    /// You are responsible for including all relevant data in the signature
+    /// within the closure. Forgetting to include the payload can lead to security vulnerabilities.
     ///
-    /// # Example
+    /// # Arguments
     ///
-    /// ```rust
-    /// use nonce_auth::NonceClient;
-    /// use hmac::Mac;
-    ///
-    /// let client = NonceClient::new(b"shared_secret");
-    /// let payload = "request body";
-    ///
-    /// // Create protection data with payload included in signature
-    /// let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-    ///     mac.update(timestamp.as_bytes());
-    ///     mac.update(nonce.as_bytes());
-    ///     mac.update(payload.as_bytes());
-    /// }).unwrap();
-    /// ```
-    pub fn create_protection_data<F>(
-        &self,
-        signature_builder: F,
-    ) -> Result<ProtectionData, NonceError>
+    /// * `signature_builder`: A closure that defines the exact data to be signed.
+    pub fn sign_with<F>(self, signature_builder: F) -> Result<NonceCredential, NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>, &str, &str),
     {
@@ -138,63 +111,17 @@ impl NonceClient {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-
         let nonce = uuid::Uuid::new_v4().to_string();
 
-        let signature = self.generate_signature(|mac| {
+        let signature = self.client.generate_signature(|mac| {
             signature_builder(mac, &timestamp.to_string(), &nonce);
         })?;
 
-        Ok(ProtectionData {
+        Ok(NonceCredential {
             timestamp,
             nonce,
             signature,
         })
-    }
-
-    /// Generates an HMAC-SHA256 signature with custom data builder.
-    ///
-    /// This method provides maximum flexibility for signature generation by
-    /// allowing applications to define exactly what data should be included
-    /// in the signature through a closure.
-    ///
-    /// # Arguments
-    ///
-    /// * `data_builder` - A closure that adds data to the HMAC instance
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The hex-encoded HMAC signature
-    /// * `Err(NonceError)` - If there's an error in the cryptographic operations
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use nonce_auth::NonceClient;
-    /// use hmac::Mac;
-    ///
-    /// let client = NonceClient::new(b"shared_secret");
-    ///
-    /// // Generate signature with custom data
-    /// let signature = client.generate_signature(|mac| {
-    ///     mac.update(b"timestamp");
-    ///     mac.update(b"nonce");
-    ///     mac.update(b"payload");
-    ///     mac.update(b"method");
-    /// }).unwrap();
-    /// ```
-    pub fn generate_signature<F>(&self, data_builder: F) -> Result<String, NonceError>
-    where
-        F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
-    {
-        let mut mac = HmacSha256::new_from_slice(&self.secret)
-            .map_err(|e| NonceError::CryptoError(e.to_string()))?;
-
-        data_builder(&mut mac);
-
-        let result = mac.finalize();
-        let signature = hex::encode(result.into_bytes());
-        Ok(signature)
     }
 }
 
@@ -211,53 +138,64 @@ mod tests {
     }
 
     #[test]
-    fn test_create_protection_data_with_custom_signature() {
+    fn test_builder_sign_standard() {
         let client = NonceClient::new(TEST_SECRET);
-        let payload = "test payload";
+        let payload = b"test payload";
 
-        let protection_data = client
-            .create_protection_data(|mac, timestamp, nonce| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
-                mac.update(payload.as_bytes());
-            })
-            .unwrap();
+        let credential = client.credential_builder().sign(payload).unwrap();
 
-        assert!(protection_data.timestamp > 0);
-        assert!(!protection_data.nonce.is_empty());
-        assert!(!protection_data.signature.is_empty());
-        assert_eq!(protection_data.signature.len(), 64);
+        assert!(credential.timestamp > 0);
+        assert!(!credential.nonce.is_empty());
+        assert!(!credential.signature.is_empty());
+        assert_eq!(credential.signature.len(), 64);
 
-        // Verify the signature includes the payload
+        // Verify the signature matches the expected components
         let expected_signature = client
             .generate_signature(|mac| {
-                mac.update(protection_data.timestamp.to_string().as_bytes());
-                mac.update(protection_data.nonce.as_bytes());
-                mac.update(payload.as_bytes());
+                mac.update(credential.timestamp.to_string().as_bytes());
+                mac.update(credential.nonce.as_bytes());
+                mac.update(payload);
             })
             .unwrap();
-        assert_eq!(protection_data.signature, expected_signature);
+        assert_eq!(credential.signature, expected_signature);
     }
 
     #[test]
-    fn test_multiple_protection_data_different_nonces() {
+    fn test_builder_sign_with_custom_logic() {
+        let client = NonceClient::new(TEST_SECRET);
+        let payload = "test payload";
+        let extra = "extra_context";
+
+        let credential = client
+            .credential_builder()
+            .sign_with(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+                mac.update(payload.as_bytes());
+                mac.update(extra.as_bytes());
+            })
+            .unwrap();
+
+        // Verify the signature includes all custom parts
+        let expected_signature = client
+            .generate_signature(|mac| {
+                mac.update(credential.timestamp.to_string().as_bytes());
+                mac.update(credential.nonce.as_bytes());
+                mac.update(payload.as_bytes());
+                mac.update(extra.as_bytes());
+            })
+            .unwrap();
+        assert_eq!(credential.signature, expected_signature);
+    }
+
+    #[test]
+    fn test_multiple_credentials_different_nonces() {
         let client = NonceClient::new(TEST_SECRET);
 
-        let protection_data1 = client
-            .create_protection_data(|mac, timestamp, nonce| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
-            })
-            .unwrap();
+        let credential1 = client.credential_builder().sign(b"payload1").unwrap();
+        let credential2 = client.credential_builder().sign(b"payload2").unwrap();
 
-        let protection_data2 = client
-            .create_protection_data(|mac, timestamp, nonce| {
-                mac.update(timestamp.as_bytes());
-                mac.update(nonce.as_bytes());
-            })
-            .unwrap();
-
-        assert_ne!(protection_data1.nonce, protection_data2.nonce);
-        assert_ne!(protection_data1.signature, protection_data2.signature);
+        assert_ne!(credential1.nonce, credential2.nonce);
+        assert_ne!(credential1.signature, credential2.signature);
     }
 }

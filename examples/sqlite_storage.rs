@@ -314,7 +314,6 @@ mod tests {
 // Example usage
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use hmac::Mac;
     use nonce_auth::{NonceClient, NonceServer};
     use std::sync::Arc;
 
@@ -329,20 +328,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(secret);
     let server = NonceServer::new(secret, storage.clone(), None, None);
 
-    // Client generates authentication data
-    let protection_data = client.create_protection_data(|mac, timestamp, nonce| {
-        mac.update(timestamp.as_bytes());
-        mac.update(nonce.as_bytes());
-    })?;
+    // Client generates a credential
+    let payload = b"database_payload";
+    let credential = client.credential_builder().sign(payload)?;
 
-    println!("Generated protection data: {protection_data:?}");
+    println!("Generated credential: {credential:?}");
 
-    // Server verifies the authentication data
+    // Server verifies the credential using the standard method
     match server
-        .verify_protection_data(&protection_data, None, |mac| {
-            mac.update(protection_data.timestamp.to_string().as_bytes());
-            mac.update(protection_data.nonce.as_bytes());
-        })
+        .credential_verifier(&credential)
+        .verify(payload)
         .await
     {
         Ok(()) => println!("✅ Authentication verified successfully"),
