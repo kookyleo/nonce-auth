@@ -36,23 +36,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let credential = client.credential_builder().sign(payload)?;
     println!("生成的凭证: {:?}", credential);
 
-    // 4. 服务端验证凭证
-    // 验证逻辑必须使用与客户端完全相同的数据
-    let verification_result = server.verify_credential(&credential, None, |mac| {
-        mac.update(credential.timestamp.to_string().as_bytes());
-        mac.update(credential.nonce.as_bytes());
-        mac.update(payload);
-    }).await;
+    // 4. 服务端使用标准的、对称的方法验证凭证
+    let verification_result = server
+        .credential_verifier(&credential)
+        .verify(payload)
+        .await;
 
     assert!(verification_result.is_ok());
     println!("✅ 首次验证成功!");
 
     // 5. 再次使用相同的凭证将会失败
-    let replay_result = server.verify_credential(&credential, None, |mac| {
-        mac.update(credential.timestamp.to_string().as_bytes());
-        mac.update(credential.nonce.as_bytes());
-        mac.update(payload);
-    }).await;
+    let replay_result = server
+        .credential_verifier(&credential)
+        .verify(payload)
+        .await;
 
     assert!(replay_result.is_err());
     println!("✅ 成功拒绝重放攻击!");

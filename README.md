@@ -36,23 +36,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let credential = client.credential_builder().sign(payload)?;
     println!("Generated credential: {:?}", credential);
 
-    // 4. The server verifies the credential.
-    // The verification logic MUST use the exact same data as the client.
-    let verification_result = server.verify_credential(&credential, None, |mac| {
-        mac.update(credential.timestamp.to_string().as_bytes());
-        mac.update(credential.nonce.as_bytes());
-        mac.update(payload);
-    }).await;
+    // 4. The server verifies the credential using the standard, symmetric method.
+    let verification_result = server
+        .credential_verifier(&credential)
+        .verify(payload)
+        .await;
 
     assert!(verification_result.is_ok());
     println!("✅ First verification successful!");
 
     // 5. Attempting to use the same credential again will fail.
-    let replay_result = server.verify_credential(&credential, None, |mac| {
-        mac.update(credential.timestamp.to_string().as_bytes());
-        mac.update(credential.nonce.as_bytes());
-        mac.update(payload);
-    }).await;
+    let replay_result = server
+        .credential_verifier(&credential)
+        .verify(payload)
+        .await;
 
     assert!(replay_result.is_err());
     println!("✅ Replay attack correctly rejected!");
