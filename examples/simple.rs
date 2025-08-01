@@ -1,5 +1,4 @@
-use nonce_auth::{NonceClient, NonceServer, storage::MemoryStorage};
-use std::sync::Arc;
+use nonce_auth::{NonceClient, NonceServer};
 use std::time::Duration;
 
 #[tokio::main]
@@ -7,15 +6,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pre-shared key between client and server
     let psk = b"my-secret-key";
 
-    // Create storage backend
-    let storage = Arc::new(MemoryStorage::new());
-
-    // Initialize server
-    let server = NonceServer::builder(psk, storage)
+    // Initialize server. By default, it uses `MemoryStorage`.
+    let server = NonceServer::builder(psk)
         .with_ttl(Duration::from_secs(300))
         .with_time_window(Duration::from_secs(60))
         .build_and_init()
         .await?;
+
+    // To use a different storage backend, like SQLite:
+    // let storage = Arc::new(SqliteStorage::new("my_app.db")?);
+    // let server = NonceServer::builder(psk)
+    //     .with_storage(storage)
+    //     .build_and_init()
+    //     .await?;
 
     // Initialize client
     let client = NonceClient::new(psk);

@@ -14,13 +14,11 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```rust
-/// use nonce_auth::{NonceServer, NonceError, NonceClient, storage::MemoryStorage};
+/// use nonce_auth::{NonceServer, NonceError, NonceClient};
 /// use hmac::Mac;
-/// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let storage = Arc::new(MemoryStorage::new());
-/// let server = NonceServer::builder(b"secret", storage).build_and_init().await?;
+/// let server = NonceServer::builder(b"secret").build_and_init().await?;
 /// let client = NonceClient::new(b"secret");
 /// let payload = b"test payload";
 /// let credential = client.credential_builder().sign(payload)?;

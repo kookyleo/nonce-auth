@@ -323,7 +323,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create client and server
     let secret = b"shared_secret_key";
     let client = NonceClient::new(secret);
-    let server = NonceServer::builder(secret, storage.clone())
+    let server = NonceServer::builder(secret)
+        .with_storage(storage.clone())
         .build_and_init()
         .await?;
 

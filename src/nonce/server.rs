@@ -1,16 +1,13 @@
-use hmac::Mac;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hmac::Mac;
+
 use super::{CredentialVerifier, NonceError, NonceServerBuilder, NonceStorage};
+use crate::storage::MemoryStorage;
 use crate::{HmacSha256, NonceCredential};
 
 /// A server that verifies `NonceCredential`s and manages nonce storage.
-///
-/// This server is responsible for the core security logic:
-/// - Verifying credential signatures.
-/// - Validating timestamps.
-/// - Preventing nonce reuse (replay attacks).
 ///
 /// To create an instance, use the `NonceServer::builder()` method.
 pub struct NonceServer<S: NonceStorage> {
@@ -20,12 +17,17 @@ pub struct NonceServer<S: NonceStorage> {
     pub(crate) storage: Arc<S>,
 }
 
-impl<S: NonceStorage> NonceServer<S> {
+impl NonceServer<MemoryStorage> {
     /// Creates a new `NonceServerBuilder` to construct a `NonceServer`.
-    pub fn builder(secret: &[u8], storage: Arc<S>) -> NonceServerBuilder<S> {
-        NonceServerBuilder::new(secret, storage)
+    ///
+    /// The builder defaults to using `MemoryStorage`. Provide a custom storage
+    /// backend using the `.with_storage()` method on the builder.
+    pub fn builder(secret: &[u8]) -> NonceServerBuilder<MemoryStorage> {
+        NonceServerBuilder::new(secret)
     }
+}
 
+impl<S: NonceStorage> NonceServer<S> {
     /// Internal constructor used by the builder.
     pub(crate) fn new(
         secret: &[u8],

@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::nonce::{NonceError, NonceServer};
-use crate::storage::NonceStorage;
+use crate::storage::{MemoryStorage, NonceStorage};
 
 /// A builder for creating a `NonceServer` instance.
 ///
-/// This builder provides a more ergonomic way to configure and initialize the server.
+/// This builder defaults to using `MemoryStorage` and allows for ergonomic
+/// configuration of all server parameters.
 #[must_use = "The builder does nothing unless `.build_and_init()` is called."]
 pub struct NonceServerBuilder<S: NonceStorage> {
     secret: Vec<u8>,
@@ -15,14 +16,29 @@ pub struct NonceServerBuilder<S: NonceStorage> {
     time_window: Option<Duration>,
 }
 
-impl<S: NonceStorage> NonceServerBuilder<S> {
-    /// Creates a new builder with the required parameters.
-    pub(crate) fn new(secret: &[u8], storage: Arc<S>) -> Self {
+impl NonceServerBuilder<MemoryStorage> {
+    /// Creates a new builder with the required secret key.
+    ///
+    /// By default, this builder uses `MemoryStorage`. Use `.with_storage()` to
+    /// provide a different storage backend.
+    pub(crate) fn new(secret: &[u8]) -> Self {
         Self {
             secret: secret.to_vec(),
-            storage,
+            storage: Arc::new(MemoryStorage::new()),
             ttl: None,
             time_window: None,
+        }
+    }
+}
+
+impl<S: NonceStorage> NonceServerBuilder<S> {
+    /// Specifies a custom storage backend to use instead of the default `MemoryStorage`.
+    pub fn with_storage<T: NonceStorage>(self, storage: Arc<T>) -> NonceServerBuilder<T> {
+        NonceServerBuilder {
+            secret: self.secret,
+            storage,
+            ttl: self.ttl,
+            time_window: self.time_window,
         }
     }
 

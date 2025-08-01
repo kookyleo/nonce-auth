@@ -41,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Create server with production configuration
     let config = NonceConfig::production();
-    let server = NonceServer::builder(b"production_secret_key_12345", memory_storage.clone())
+    let server = NonceServer::builder(b"production_secret_key_12345")
+        .with_storage(memory_storage.clone())
         .with_ttl(config.default_ttl)
         .with_time_window(config.time_window)
         .build_and_init()

@@ -42,16 +42,12 @@ pub struct NonceCredential {
 
 #[cfg(test)]
 mod tests {
-    use crate::nonce::storage::MemoryStorage;
     use crate::nonce::{NonceClient, NonceError, NonceServer};
-
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_client_server_separation() {
-        let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret", storage)
+        let server = NonceServer::builder(b"test_secret")
             .build_and_init()
             .await
             .unwrap();
@@ -79,9 +75,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_isolation() {
-        let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret", storage)
+        let server = NonceServer::builder(b"test_secret")
             .build_and_init()
             .await
             .unwrap();
@@ -116,9 +111,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_timestamp_validation() {
-        let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret", storage)
+        let server = NonceServer::builder(b"test_secret")
             .with_time_window(std::time::Duration::from_secs(1))
             .build_and_init()
             .await
@@ -145,9 +139,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_signature_verification() {
-        let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"different_secret", storage)
+        let server = NonceServer::builder(b"different_secret")
             .build_and_init()
             .await
             .unwrap();

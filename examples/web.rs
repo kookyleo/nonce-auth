@@ -1,5 +1,5 @@
 use hmac::Mac;
-use nonce_auth::{NonceServer, storage::MemoryStorage};
+use nonce_auth::NonceServer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -274,20 +274,23 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     )
 }
 
-// Store PSKs for each session
+// Store PSKs and NonceServers for each session
 type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
+type ServerStore =
+    Arc<tokio::sync::Mutex<HashMap<String, Arc<NonceServer<nonce_auth::storage::MemoryStorage>>>>>;
 
 #[tokio::main]
 async fn main() {
-    // Storage will be created per request to keep web example simple
-
-    // Create PSK store
+    // Create PSK store and server store
     let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let server_store: ServerStore = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // Serve index.html at the root path with embedded PSK
     let psk_store_filter = warp::any().map(move || psk_store.clone());
+    let server_store_filter = warp::any().map(move || server_store.clone());
     let index_route = warp::path::end()
         .and(psk_store_filter.clone())
+        .and(server_store_filter.clone())
         .and_then(handle_index_request);
 
     // Protected API route
@@ -296,6 +299,7 @@ async fn main() {
         .and(warp::post())
         .and(warp::body::json())
         .and(psk_store_filter)
+        .and(server_store_filter)
         .and_then(handle_protected_request);
 
     // Combine routes
@@ -313,7 +317,10 @@ async fn main() {
     warp::serve(routes).run(([127, 0, 0, 1], 3000)).await;
 }
 
-async fn handle_index_request(psk_store: PskStore) -> Result<impl warp::Reply, warp::Rejection> {
+async fn handle_index_request(
+    psk_store: PskStore,
+    server_store: ServerStore,
+) -> Result<impl warp::Reply, warp::Rejection> {
     // Generate a new PSK and session ID for this page load
     let psk = generate_psk();
     let session_id = generate_psk(); // Use same function for session ID
@@ -323,12 +330,12 @@ async fn handle_index_request(psk_store: PskStore) -> Result<impl warp::Reply, w
         let mut store = psk_store.lock().unwrap();
         store.insert(session_id.clone(), psk.clone());
         println!("Stored PSK for session ID: {session_id}");
+    }
 
-        // Clean up old PSKs (disabled for debugging)
-        // if store.len() > 5 {
-        //     store.clear();
-        //     store.insert(session_id.clone(), psk.clone());
-        // }
+    // Clean up the server for this session (if it exists)
+    {
+        let mut servers = server_store.lock().await;
+        servers.remove(&session_id);
     }
 
     // Generate HTML with embedded PSK and session ID
@@ -339,6 +346,7 @@ async fn handle_index_request(psk_store: PskStore) -> Result<impl warp::Reply, w
 async fn handle_protected_request(
     req: AuthenticatedRequest,
     psk_store: PskStore,
+    server_store: ServerStore,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Get the PSK from store using session ID
     let psk = {
@@ -359,14 +367,25 @@ async fn handle_protected_request(
         }
     };
 
-    // Create storage and server with PSK
-    let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::builder(psk.as_bytes(), storage)
-        .with_ttl(Duration::from_secs(60))
-        .with_time_window(Duration::from_secs(15))
-        .build_and_init()
-        .await
-        .expect("Failed to initialize server");
+    // Get or create the server for this session
+    let server = {
+        let mut servers = server_store.lock().await;
+        match servers.get(&req.session_id) {
+            Some(server) => server.clone(),
+            None => {
+                // Create a new server for this session
+                let new_server = NonceServer::builder(psk.as_bytes())
+                    .with_ttl(Duration::from_secs(60)) // 1 minute TTL
+                    .with_time_window(Duration::from_secs(15)) // 15 seconds time window
+                    .build_and_init()
+                    .await
+                    .expect("Failed to initialize server");
+                let server = Arc::new(new_server);
+                servers.insert(req.session_id.clone(), server.clone());
+                server
+            }
+        }
+    };
 
     // Verify the request using the custom logic verifier
     match server
