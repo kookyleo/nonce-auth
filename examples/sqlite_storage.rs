@@ -320,13 +320,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create SQLite storage backend
     let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
 
-    // Initialize the storage
-    storage.init().await?;
-
     // Create client and server
     let secret = b"shared_secret_key";
     let client = NonceClient::new(secret);
-    let server = NonceServer::new(secret, storage.clone(), None, None);
+    let server = NonceServer::builder(secret, storage.clone())
+        .build_and_init()
+        .await?;
 
     // Client generates a credential
     let payload = b"database_payload";

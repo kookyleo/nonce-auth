@@ -20,8 +20,7 @@ use thiserror::Error;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let storage = Arc::new(MemoryStorage::new());
-/// let server = NonceServer::new(b"secret", storage, None, None);
-/// server.init().await?;
+/// let server = NonceServer::builder(b"secret", storage).build_and_init().await?;
 /// let client = NonceClient::new(b"secret");
 /// let payload = b"test payload";
 /// let credential = client.credential_builder().sign(payload)?;

@@ -11,15 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = Arc::new(MemoryStorage::new());
 
     // Initialize server
-    let server = NonceServer::new(
-        psk,
-        storage,                        // Storage backend
-        Some(Duration::from_secs(300)), // 5 minutes TTL for nonce storage
-        Some(Duration::from_secs(60)),  // 1 minute time window for timestamp validation
-    );
-
-    // Initialize the storage backend
-    server.init().await?;
+    let server = NonceServer::builder(psk, storage)
+        .with_ttl(Duration::from_secs(300))
+        .with_time_window(Duration::from_secs(60))
+        .build_and_init()
+        .await?;
 
     // Initialize client
     let client = NonceClient::new(psk);

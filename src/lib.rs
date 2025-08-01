@@ -51,10 +51,11 @@ mod tests {
     async fn test_client_server_separation() {
         let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::new(b"test_secret", storage, None, None);
+        let server = NonceServer::builder(b"test_secret", storage)
+            .build_and_init()
+            .await
+            .unwrap();
         let payload = b"test_payload";
-
-        server.init().await.unwrap();
 
         // Client creates a credential
         let credential = client.credential_builder().sign(payload).unwrap();
@@ -80,10 +81,11 @@ mod tests {
     async fn test_context_isolation() {
         let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::new(b"test_secret", storage, None, None);
+        let server = NonceServer::builder(b"test_secret", storage)
+            .build_and_init()
+            .await
+            .unwrap();
         let payload = b"test_payload";
-
-        server.init().await.unwrap();
 
         let credential = client.credential_builder().sign(payload).unwrap();
 
@@ -116,15 +118,12 @@ mod tests {
     async fn test_timestamp_validation() {
         let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::new(
-            b"test_secret",
-            storage,
-            None,
-            Some(std::time::Duration::from_secs(1)),
-        );
+        let server = NonceServer::builder(b"test_secret", storage)
+            .with_time_window(std::time::Duration::from_secs(1))
+            .build_and_init()
+            .await
+            .unwrap();
         let payload = b"test_payload";
-
-        server.init().await.unwrap();
 
         // Create credential with old timestamp
         let mut credential = client.credential_builder().sign(payload).unwrap();
@@ -148,10 +147,11 @@ mod tests {
     async fn test_signature_verification() {
         let storage = Arc::new(MemoryStorage::new());
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::new(b"different_secret", storage, None, None);
+        let server = NonceServer::builder(b"different_secret", storage)
+            .build_and_init()
+            .await
+            .unwrap();
         let payload = b"test_payload";
-
-        server.init().await.unwrap();
 
         let credential = client.credential_builder().sign(payload).unwrap();
 

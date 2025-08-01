@@ -2,7 +2,7 @@ use hmac::Mac;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{CredentialVerifier, NonceError, NonceStorage};
+use super::{CredentialVerifier, NonceError, NonceStorage, NonceServerBuilder};
 use crate::{HmacSha256, NonceCredential};
 
 /// A server that verifies `NonceCredential`s and manages nonce storage.
@@ -11,6 +11,8 @@ use crate::{HmacSha256, NonceCredential};
 /// - Verifying credential signatures.
 /// - Validating timestamps.
 /// - Preventing nonce reuse (replay attacks).
+///
+/// To create an instance, use the `NonceServer::builder()` method.
 pub struct NonceServer<S: NonceStorage> {
     pub(crate) default_ttl: Duration,
     pub(crate) time_window: Duration,
@@ -19,15 +21,13 @@ pub struct NonceServer<S: NonceStorage> {
 }
 
 impl<S: NonceStorage> NonceServer<S> {
-    /// Creates a new `NonceServer`.
-    ///
-    /// # Arguments
-    ///
-    /// * `secret`: The secret key shared with the client.
-    /// * `storage`: An `Arc` wrapped storage backend.
-    /// * `default_ttl`: Optional override for the nonce TTL. Defaults to 5 minutes.
-    /// * `time_window`: Optional override for the timestamp validation window. Defaults to 1 minute.
-    pub fn new(
+    /// Creates a new `NonceServerBuilder` to construct a `NonceServer`.
+    pub fn builder(secret: &[u8], storage: Arc<S>) -> NonceServerBuilder<S> {
+        NonceServerBuilder::new(secret, storage)
+    }
+
+    /// Internal constructor used by the builder.
+    pub(crate) fn new(
         secret: &[u8],
         storage: Arc<S>,
         default_ttl: Option<Duration>,
@@ -44,12 +44,6 @@ impl<S: NonceStorage> NonceServer<S> {
     }
 
     /// Returns a builder-like verifier to check the validity of a `NonceCredential`.
-    ///
-    /// This is the recommended entry point for all verification operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `credential`: The credential to be verified.
     pub fn credential_verifier<'a>(
         &'a self,
         credential: &'a NonceCredential,
@@ -58,7 +52,7 @@ impl<S: NonceStorage> NonceServer<S> {
     }
 
     /// Initializes the storage backend (e.g., creates database tables).
-    pub async fn init(&self) -> Result<(), NonceError> {
+    pub(crate) async fn init(&self) -> Result<(), NonceError> {
         self.storage.init().await
     }
 
@@ -76,11 +70,7 @@ impl<S: NonceStorage> NonceServer<S> {
     }
 
     /// Verifies the HMAC signature using the provided data builder.
-    pub(crate) fn verify_signature<F>(
-        &self,
-        signature: &str,
-        data_builder: F,
-    ) -> Result<(), NonceError>
+    pub(crate) fn verify_signature<F>(&self, signature: &str, data_builder: F) -> Result<(), NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
     {

@@ -361,15 +361,12 @@ async fn handle_protected_request(
 
     // Create storage and server with PSK
     let storage = Arc::new(MemoryStorage::new());
-    let server = NonceServer::new(
-        psk.as_bytes(),
-        storage,
-        Some(Duration::from_secs(60)), // 1 minute TTL
-        Some(Duration::from_secs(15)), // 15 seconds time window
-    );
-
-    // Initialize storage
-    server.init().await.expect("Failed to initialize storage");
+    let server = NonceServer::builder(psk.as_bytes(), storage)
+        .with_ttl(Duration::from_secs(60))
+        .with_time_window(Duration::from_secs(15))
+        .build_and_init()
+        .await
+        .expect("Failed to initialize server");
 
     // Verify the request using the custom logic verifier
     match server
