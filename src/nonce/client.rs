@@ -53,7 +53,7 @@ impl NonceClient {
             time_provider: Box::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| NonceError::CryptoError(format!("System clock error: {}", e)))
+                    .map_err(|e| NonceError::CryptoError(format!("System clock error: {e}")))
                     .map(|d| d.as_secs())
             }),
         }
@@ -67,7 +67,7 @@ impl NonceClient {
     /// Returns a builder to construct and sign a `NonceCredential`.
     ///
     /// This is the recommended entry point for creating credentials.
-    pub fn credential_builder(&self) -> NonceCredentialBuilder {
+    pub fn credential_builder(&self) -> NonceCredentialBuilder<'_> {
         NonceCredentialBuilder::new(self)
     }
 
@@ -232,7 +232,7 @@ impl NonceClientBuilder {
             Box::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| NonceError::CryptoError(format!("System clock error: {}", e)))
+                    .map_err(|e| NonceError::CryptoError(format!("System clock error: {e}")))
                     .map(|d| d.as_secs())
             })
         });

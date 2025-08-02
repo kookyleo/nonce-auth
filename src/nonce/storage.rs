@@ -276,7 +276,7 @@ impl NonceStorage for MemoryStorage {
             nonce: nonce.to_string(),
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| NonceError::CryptoError(format!("System clock error: {}", e)))?
+                .map_err(|e| NonceError::CryptoError(format!("System clock error: {e}")))?
                 .as_secs() as i64,
             context: context.map(|s| s.to_string()),
         };
