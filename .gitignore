@@ -21,3 +21,5 @@ nonce_auth.db*
 .*
 !/.gitignore
 !/.github
+
+Cargo.lock
