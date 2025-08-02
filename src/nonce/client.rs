@@ -341,7 +341,7 @@ mod tests {
             .with_secret(TEST_SECRET)
             .with_nonce_generator(move || {
                 let val = counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                format!("custom-nonce-{}", val)
+                format!("custom-nonce-{val}")
             })
             .build();
 

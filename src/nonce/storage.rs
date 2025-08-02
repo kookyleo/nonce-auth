@@ -249,7 +249,7 @@ impl MemoryStorage {
 
     /// Creates a storage key from nonce and context.
     fn make_key(nonce: &str, context: Option<&str>) -> String {
-        format!("{}:{}", nonce, context.unwrap_or(""))
+        format!("{nonce}:{}", context.unwrap_or(""))
     }
 }
 
