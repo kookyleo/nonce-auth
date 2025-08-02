@@ -26,6 +26,7 @@ let server = NonceServer::builder()
 
 | 方法 | 描述 | 默认值 |
 |-----|------|-------|
+| `with_preset(ConfigPreset)` | 应用配置预设 | - |
 | `with_ttl(Duration)` | 设置 nonce 生存时间 | 5 分钟 |
 | `with_time_window(Duration)` | 设置时间戳验证窗口 | 1 分钟 |
 | `with_storage(Arc<T>)` | 设置自定义存储后端 | `MemoryStorage` |
@@ -36,27 +37,37 @@ let server = NonceServer::builder()
 针对常见场景的内置配置预设：
 
 ```rust
-use nonce_auth::NonceConfig;
+use nonce_auth::{NonceServer, ConfigPreset};
 
-// 生产环境：平衡安全性和可用性
-let config = NonceConfig::production();
-assert_eq!(config.default_ttl, Duration::from_secs(300));  // 5 分钟
-assert_eq!(config.time_window, Duration::from_secs(60));   // 1 分钟
-
-// 开发环境：对开发者友好的设置
-let config = NonceConfig::development();
-assert_eq!(config.default_ttl, Duration::from_secs(600));  // 10 分钟
-assert_eq!(config.time_window, Duration::from_secs(120));  // 2 分钟
-
-// 高安全性：最大安全性，较短的时间窗口
-let config = NonceConfig::high_security();
-assert_eq!(config.default_ttl, Duration::from_secs(120));  // 2 分钟
-assert_eq!(config.time_window, Duration::from_secs(30));   // 30 秒
-
-// 将预设应用到服务器
+// 生产环境：平衡安全性和可用性 (TTL: 5分钟, 窗口: 1分钟)
 let server = NonceServer::builder()
-    .with_ttl(config.default_ttl)
-    .with_time_window(config.time_window)
+    .with_preset(ConfigPreset::Production)
+    .build_and_init()
+    .await?;
+
+// 开发环境：对开发者友好的设置 (TTL: 10分钟, 窗口: 2分钟)
+let dev_server = NonceServer::builder()
+    .with_preset(ConfigPreset::Development)
+    .build_and_init()
+    .await?;
+
+// 高安全性：最大安全性 (TTL: 2分钟, 窗口: 30秒)
+let secure_server = NonceServer::builder()
+    .with_preset(ConfigPreset::HighSecurity)
+    .build_and_init()
+    .await?;
+
+// 从环境变量加载
+// 读取 NONCE_AUTH_DEFAULT_TTL 和 NONCE_AUTH_DEFAULT_TIME_WINDOW
+let env_server = NonceServer::builder()
+    .with_preset(ConfigPreset::FromEnv)
+    .build_and_init()
+    .await?;
+
+// 覆盖预设值
+let custom_server = NonceServer::builder()
+    .with_preset(ConfigPreset::Production)
+    .with_ttl(Duration::from_secs(600))  // 覆盖生产环境 TTL
     .build_and_init()
     .await?;
 ```
@@ -432,6 +443,20 @@ let result = server
     .verify(b"payload")
     .await;
 
+// 结构化多组件验证
+let user_id = b"user123";
+let payload = b"data";
+let api_version = b"v1";
+
+let credential = client.credential_builder()
+    .sign_structured(&[user_id, payload, api_version])?;
+
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(b"shared_secret")
+    .verify_structured(&[user_id, payload, api_version])
+    .await;
+
 match result {
     Ok(()) => println!("✓ 凭证验证成功"),
     Err(e) => println!("✗ 验证失败: {}", e),
@@ -447,6 +472,42 @@ let result = server
     .with_secret(user_secret)
     .with_context(Some("api_v1"))  // 上下文特定的 nonce 隔离
     .verify(payload)
+    .await;
+
+// 动态密钥验证和上下文
+async fn fetch_user_secret(user_id: &str) -> Result<Vec<u8>, NonceError> {
+    // 根据 user_id 从数据库/缓存获取密钥
+    Ok(format!("secret_for_{}", user_id).into_bytes())
+}
+
+let user_id = "user123";
+let result = server
+    .credential_verifier(&credential)
+    .with_context(Some(user_id))
+    .verify_with_secret_provider(payload, |context| async move {
+        match context {
+            Some(user_id) => fetch_user_secret(&user_id).await,
+            None => Err(NonceError::CryptoError("需要上下文".to_string())),
+        }
+    })
+    .await;
+
+// 结构化验证与动态密钥
+let credential = client.credential_builder()
+    .sign_structured(&[user_id.as_bytes(), payload])?;
+
+let result = server
+    .credential_verifier(&credential)
+    .with_context(Some(user_id))
+    .verify_structured_with_secret_provider(
+        &[user_id.as_bytes(), payload],
+        |context| async move {
+            match context {
+                Some(user_id) => fetch_user_secret(&user_id).await,
+                None => Err(NonceError::CryptoError("需要上下文".to_string())),
+            }
+        }
+    )
     .await;
 
 // 匹配自定义签名的自定义验证逻辑
@@ -518,7 +579,10 @@ let result = server
 | `with_secret(&[u8])` | 密钥字节 | 设置验证密钥 (必需) |
 | `with_context(Option<&str>)` | 上下文字符串 | 设置 nonce 隔离上下文 |
 | `verify(&[u8])` | 载荷字节 | 标准验证 |
+| `verify_structured(&[&[u8]])` | 数据组件 | 结构化数据验证 |
 | `verify_with<F>(F)` | MAC 构建器闭包 | 自定义验证逻辑 |
+| `verify_with_secret_provider<F>(payload, F)` | 载荷, 异步密钥提供器 | 动态密钥验证 |
+| `verify_structured_with_secret_provider<F>(components, F)` | 组件, 异步密钥提供器 | 结构化 + 动态密钥 |
 
 ## 多密钥和上下文支持
 
@@ -616,6 +680,21 @@ match server.credential_verifier(&credential)
         println!("⚠ 加密错误: {}", msg);
     },
 }
+
+// 使用错误工具方法
+let error = NonceError::DuplicateNonce;
+println!("错误代码: {}", error.code());                      // "duplicate_nonce"
+println!("是临时错误: {}", error.is_temporary());           // false
+println!("是认证错误: {}", error.is_authentication_error()); // true
+
+let db_error = NonceError::from_database_message("连接超时");
+println!("错误代码: {}", db_error.code());                 // "database_error"
+println!("是临时错误: {}", db_error.is_temporary());       // true
+println!("是认证错误: {}", db_error.is_authentication_error()); // false
+
+// 错误分类方法
+println!("是客户端错误: {}", error.is_client_error());   // 认证错误为 true
+println!("是服务器错误: {}", db_error.is_server_error()); // 系统错误为 true
 ```
 
 ### 高级错误处理模式

@@ -1,26 +1,49 @@
-//! Example SQLite storage backend implementation for nonce-auth.
+//! SQLite storage backend implementation.
 //!
-//! This example demonstrates how to implement a custom storage backend
-//! using SQLite as the persistence layer.
+//! This module provides a production-ready SQLite storage backend for nonce persistence.
+//! It's ideal for single-instance applications that need persistent storage.
 
+use super::{NonceEntry, NonceStorage, StorageStats};
+use crate::NonceError;
 use async_trait::async_trait;
-use nonce_auth::NonceError;
-use nonce_auth::storage::{NonceEntry, NonceStorage, StorageStats};
 use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// SQLite-based storage backend for nonce persistence.
 ///
-/// This implementation provides persistent storage using SQLite,
-/// making it suitable for production use where data needs to
-/// survive application restarts.
+/// This implementation provides persistent storage using SQLite, making it suitable
+/// for production use where data needs to survive application restarts.
+///
+/// # Features
+///
+/// - **Persistent storage**: Data survives application restarts
+/// - **Context isolation**: Supports nonce namespacing via contexts
+/// - **Automatic indexing**: Optimized queries for nonce lookup and cleanup
+/// - **Thread-safe**: Uses Arc<Mutex<Connection>> for concurrent access
+/// - **ACID compliance**: Leverages SQLite's transactional guarantees
+///
+/// # Example
+///
+/// ```rust
+/// use nonce_auth::storage::SqliteStorage;
+/// use std::sync::Arc;
+///
+/// # async fn example() -> Result<(), nonce_auth::NonceError> {
+/// // Create SQLite storage (file-based)
+/// let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
+///
+/// // Or use in-memory SQLite (for testing)
+/// let memory_storage = Arc::new(SqliteStorage::new(":memory:")?);
+/// # Ok(())
+/// # }
+/// ```
 pub struct SqliteStorage {
     connection: Arc<Mutex<Connection>>,
 }
 
 impl SqliteStorage {
-    /// Creates a new SQLite storage backend.
+    /// Create a new SQLite storage backend.
     ///
     /// # Arguments
     ///
@@ -30,6 +53,21 @@ impl SqliteStorage {
     ///
     /// * `Ok(SqliteStorage)` - Successfully created storage instance
     /// * `Err(NonceError)` - Failed to open database connection
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::storage::SqliteStorage;
+    ///
+    /// # fn example() -> Result<(), nonce_auth::NonceError> {
+    /// // File-based storage
+    /// let storage = SqliteStorage::new("./data/nonce_auth.db")?;
+    ///
+    /// // In-memory storage (for testing)
+    /// let memory_storage = SqliteStorage::new(":memory:")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(db_path: &str) -> Result<Self, NonceError> {
         let connection = if db_path == ":memory:" {
             Connection::open_in_memory()
@@ -44,10 +82,11 @@ impl SqliteStorage {
         })
     }
 
-    /// Creates the database schema if it doesn't exist.
+    /// Create the database schema if it doesn't exist.
     fn init_schema(&self) -> Result<(), NonceError> {
         let conn = self.connection.lock().unwrap();
 
+        // Create main table
         conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS nonce_record (
@@ -62,7 +101,7 @@ impl SqliteStorage {
         )
         .map_err(|e| NonceError::from_database_message(e.to_string()))?;
 
-        // Create indexes for better performance
+        // Create performance indexes
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_nonce_context ON nonce_record (nonce, context)",
             [],
@@ -180,9 +219,20 @@ impl NonceStorage for SqliteStorage {
             .query_row("SELECT COUNT(*) FROM nonce_record", [], |row| row.get(0))
             .map_err(|e| NonceError::from_database_message(e.to_string()))?;
 
+        // Get additional SQLite-specific stats
+        let db_size: i64 = conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let page_size: i64 = conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap_or(4096);
+
+        let size_bytes = db_size * page_size;
+
         Ok(StorageStats {
             total_records: count,
-            backend_info: "SQLite storage backend".to_string(),
+            backend_info: format!("SQLite storage ({} bytes, {} pages)", size_bytes, db_size),
         })
     }
 }
@@ -268,6 +318,10 @@ mod tests {
             .set("new-nonce", None, Duration::from_secs(300))
             .await?;
 
+        // Verify they exist
+        assert!(storage.exists("old-nonce", None).await?);
+        assert!(storage.exists("new-nonce", None).await?);
+
         // Cleanup with cutoff time in the future should remove all
         let future_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -293,6 +347,7 @@ mod tests {
         // Initial stats
         let stats = storage.get_stats().await?;
         assert_eq!(stats.total_records, 0);
+        assert!(stats.backend_info.contains("SQLite"));
 
         // Add some nonces
         storage
@@ -306,48 +361,41 @@ mod tests {
         let stats = storage.get_stats().await?;
         assert_eq!(stats.total_records, 2);
         assert!(stats.backend_info.contains("SQLite"));
+        assert!(stats.backend_info.contains("bytes"));
 
         Ok(())
     }
-}
 
-// Example usage
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use nonce_auth::{NonceClient, NonceServer};
-    use std::sync::Arc;
+    #[tokio::test]
+    async fn test_sqlite_storage_persistence() -> Result<(), NonceError> {
+        // Create a temporary file for testing persistence
+        let temp_path = format!("/tmp/test_nonce_{}.db", std::process::id());
 
-    // Create SQLite storage backend
-    let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
+        // Create storage and add data
+        {
+            let storage = SqliteStorage::new(&temp_path)?;
+            storage.init().await?;
 
-    // Create client and server
-    let secret = b"shared_secret_key";
-    let client = NonceClient::new(secret);
-    let server = NonceServer::builder()
-        .with_storage(storage.clone())
-        .build_and_init()
-        .await?;
+            storage
+                .set("persistent-nonce", None, Duration::from_secs(300))
+                .await?;
+        }
 
-    // Client generates a credential
-    let payload = b"database_payload";
-    let credential = client.credential_builder().sign(payload)?;
+        // Reopen storage and verify data persists
+        {
+            let storage = SqliteStorage::new(&temp_path)?;
+            storage.init().await?;
 
-    println!("Generated credential: {credential:?}");
+            assert!(storage.exists("persistent-nonce", None).await?);
 
-    // Server verifies the credential using the standard method
-    match server
-        .credential_verifier(&credential)
-        .with_secret(secret)
-        .verify(payload)
-        .await
-    {
-        Ok(()) => println!("✅ Authentication verified successfully"),
-        Err(e) => println!("❌ Verification failed: {e}"),
+            let entry = storage.get("persistent-nonce", None).await?;
+            assert!(entry.is_some());
+            assert_eq!(entry.unwrap().nonce, "persistent-nonce");
+        }
+
+        // Cleanup
+        std::fs::remove_file(&temp_path).ok();
+
+        Ok(())
     }
-
-    // Show storage stats
-    let stats = storage.get_stats().await?;
-    println!("Storage stats: {stats:?}");
-
-    Ok(())
 }

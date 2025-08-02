@@ -11,6 +11,17 @@ use thiserror::Error;
 /// - **Authentication Errors**: `DuplicateNonce`, `ExpiredNonce`, `InvalidSignature`, `TimestampOutOfWindow`
 /// - **System Errors**: `DatabaseError`, `CryptoError`
 ///
+/// # Error Codes
+///
+/// Each error variant has a stable string code that can be used for programmatic error handling:
+///
+/// ```rust
+/// use nonce_auth::NonceError;
+///
+/// let error = NonceError::DuplicateNonce;
+/// assert_eq!(error.code(), "duplicate_nonce");
+/// ```
+///
 /// # Example
 ///
 /// ```rust
@@ -126,8 +137,8 @@ pub enum NonceError {
     /// A database operation failed.
     ///
     /// This error occurs when there's a problem with the underlying
-    /// SQLite database operations, such as connection issues, disk
-    /// space problems, or corruption.
+    /// database operations, such as connection issues, disk space
+    /// problems, or corruption.
     ///
     /// # When This Occurs
     ///
@@ -143,7 +154,7 @@ pub enum NonceError {
     /// - Ensure proper database initialization
     /// - Check for competing database access
     #[error("Database error: {0}")]
-    DatabaseError(String),
+    DatabaseError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// A cryptographic operation failed.
     ///
@@ -166,12 +177,197 @@ pub enum NonceError {
     CryptoError(String),
 }
 
+impl NonceError {
+    /// Returns a stable string code for this error that can be used for programmatic error handling.
+    ///
+    /// The error codes are guaranteed to remain stable across versions, making them
+    /// suitable for use in error handling logic, logging, monitoring, and API responses.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let error = NonceError::DuplicateNonce;
+    /// assert_eq!(error.code(), "duplicate_nonce");
+    ///
+    /// match error.code() {
+    ///     "duplicate_nonce" => println!("Replay attack detected"),
+    ///     "invalid_signature" => println!("Authentication failed"),
+    ///     _ => println!("Other error"),
+    /// }
+    /// ```
+    pub fn code(&self) -> &'static str {
+        match self {
+            NonceError::DuplicateNonce => "duplicate_nonce",
+            NonceError::ExpiredNonce => "expired_nonce",
+            NonceError::InvalidSignature => "invalid_signature",
+            NonceError::TimestampOutOfWindow => "timestamp_out_of_window",
+            NonceError::DatabaseError(_) => "database_error",
+            NonceError::CryptoError(_) => "crypto_error",
+        }
+    }
+
+    /// Creates a new `DatabaseError` from any error that implements the standard library's `Error` trait.
+    ///
+    /// This is a convenience method for creating database errors while preserving the original
+    /// error information. The original error will be available through the `source()` method.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    /// use std::io;
+    /// use std::error::Error;
+    ///
+    /// let io_error = io::Error::new(io::ErrorKind::PermissionDenied, "File access denied");
+    /// let nonce_error = NonceError::from_database_error(io_error);
+    ///
+    /// assert_eq!(nonce_error.code(), "database_error");
+    /// assert!(nonce_error.source().is_some());
+    /// ```
+    pub fn from_database_error<E>(error: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        NonceError::DatabaseError(Box::new(error))
+    }
+
+    /// Creates a new `DatabaseError` from a string message.
+    ///
+    /// This method is useful when you need to create a database error from a string
+    /// without an underlying error type.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let error = NonceError::from_database_message("Connection timeout");
+    /// assert_eq!(error.code(), "database_error");
+    /// ```
+    pub fn from_database_message<S: Into<String>>(message: S) -> Self {
+        #[derive(Debug)]
+        struct SimpleError(String);
+
+        impl std::fmt::Display for SimpleError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl std::error::Error for SimpleError {}
+
+        NonceError::DatabaseError(Box::new(SimpleError(message.into())))
+    }
+
+    /// Returns true if this is a temporary error that might succeed if retried.
+    ///
+    /// Temporary errors are typically system-level issues like database connectivity
+    /// problems or transient resource constraints. Authentication errors like
+    /// `InvalidSignature` or `DuplicateNonce` are not considered temporary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let auth_error = NonceError::InvalidSignature;
+    /// let db_error = NonceError::from_database_message("Connection timeout");
+    ///
+    /// assert!(!auth_error.is_temporary());
+    /// assert!(db_error.is_temporary());
+    /// ```
+    pub fn is_temporary(&self) -> bool {
+        matches!(
+            self,
+            NonceError::DatabaseError(_) | NonceError::CryptoError(_)
+        )
+    }
+
+    /// Returns true if this is an authentication-related error.
+    ///
+    /// Authentication errors indicate issues with the credential verification
+    /// process, as opposed to system-level errors.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let auth_error = NonceError::InvalidSignature;
+    /// let system_error = NonceError::from_database_message("Connection timeout");
+    ///
+    /// assert!(auth_error.is_authentication_error());
+    /// assert!(!system_error.is_authentication_error());
+    /// ```
+    pub fn is_authentication_error(&self) -> bool {
+        matches!(
+            self,
+            NonceError::DuplicateNonce
+                | NonceError::ExpiredNonce
+                | NonceError::InvalidSignature
+                | NonceError::TimestampOutOfWindow
+        )
+    }
+
+    /// Returns true if this error represents a client-side issue.
+    ///
+    /// Client errors indicate problems with the request that should
+    /// be fixed by the client before retrying.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let client_error = NonceError::InvalidSignature;
+    /// let server_error = NonceError::from_database_message("Connection failed");
+    ///
+    /// assert!(client_error.is_client_error());
+    /// assert!(!server_error.is_client_error());
+    /// ```
+    pub fn is_client_error(&self) -> bool {
+        matches!(
+            self,
+            NonceError::DuplicateNonce
+                | NonceError::ExpiredNonce
+                | NonceError::InvalidSignature
+                | NonceError::TimestampOutOfWindow
+        )
+    }
+
+    /// Returns true if this error represents a server-side issue.
+    ///
+    /// Server errors indicate problems with the system that are
+    /// not the client's fault and may be temporary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceError;
+    ///
+    /// let server_error = NonceError::from_database_message("Connection failed");
+    /// let client_error = NonceError::InvalidSignature;
+    ///
+    /// assert!(server_error.is_server_error());
+    /// assert!(!client_error.is_server_error());
+    /// ```
+    pub fn is_server_error(&self) -> bool {
+        matches!(
+            self,
+            NonceError::DatabaseError(_) | NonceError::CryptoError(_)
+        )
+    }
+}
+
 // SQLite error conversion is now provided in examples/sqlite_storage.rs
 // since rusqlite is no longer a core dependency
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
 
     #[test]
     fn test_error_display() {
@@ -189,7 +385,7 @@ mod tests {
             "Timestamp out of window"
         );
 
-        let db_error = NonceError::DatabaseError("test error".to_string());
+        let db_error = NonceError::from_database_message("test error");
         assert_eq!(db_error.to_string(), "Database error: test error");
 
         let crypto_error = NonceError::CryptoError("crypto test error".to_string());
@@ -217,7 +413,7 @@ mod tests {
             NonceError::ExpiredNonce,
             NonceError::InvalidSignature,
             NonceError::TimestampOutOfWindow,
-            NonceError::DatabaseError("test".to_string()),
+            NonceError::from_database_message("test"),
             NonceError::CryptoError("test".to_string()),
         ];
 
@@ -227,5 +423,96 @@ mod tests {
             // Each error should be debug-printable
             assert!(!format!("{error:?}").is_empty());
         }
+    }
+
+    #[test]
+    fn test_error_codes() {
+        assert_eq!(NonceError::DuplicateNonce.code(), "duplicate_nonce");
+        assert_eq!(NonceError::ExpiredNonce.code(), "expired_nonce");
+        assert_eq!(NonceError::InvalidSignature.code(), "invalid_signature");
+        assert_eq!(
+            NonceError::TimestampOutOfWindow.code(),
+            "timestamp_out_of_window"
+        );
+        assert_eq!(
+            NonceError::from_database_message("test").code(),
+            "database_error"
+        );
+        assert_eq!(
+            NonceError::CryptoError("test".to_string()).code(),
+            "crypto_error"
+        );
+    }
+
+    #[test]
+    fn test_database_error_from_error() {
+        use std::io;
+
+        let io_error = io::Error::new(io::ErrorKind::PermissionDenied, "Permission denied");
+        let nonce_error = NonceError::from_database_error(io_error);
+
+        assert_eq!(nonce_error.code(), "database_error");
+        assert!(nonce_error.source().is_some());
+        assert!(nonce_error.to_string().contains("Permission denied"));
+    }
+
+    #[test]
+    fn test_database_error_from_message() {
+        let error = NonceError::from_database_message("Connection timeout");
+
+        assert_eq!(error.code(), "database_error");
+        assert!(error.to_string().contains("Connection timeout"));
+    }
+
+    #[test]
+    fn test_is_temporary() {
+        // Not temporary errors
+        assert!(!NonceError::DuplicateNonce.is_temporary());
+        assert!(!NonceError::ExpiredNonce.is_temporary());
+        assert!(!NonceError::InvalidSignature.is_temporary());
+        assert!(!NonceError::TimestampOutOfWindow.is_temporary());
+
+        // Temporary errors
+        assert!(NonceError::from_database_message("test").is_temporary());
+        assert!(NonceError::CryptoError("test".to_string()).is_temporary());
+    }
+
+    #[test]
+    fn test_is_client_error() {
+        // Client errors
+        assert!(NonceError::DuplicateNonce.is_client_error());
+        assert!(NonceError::ExpiredNonce.is_client_error());
+        assert!(NonceError::InvalidSignature.is_client_error());
+        assert!(NonceError::TimestampOutOfWindow.is_client_error());
+
+        // Not client errors
+        assert!(!NonceError::from_database_message("test").is_client_error());
+        assert!(!NonceError::CryptoError("test".to_string()).is_client_error());
+    }
+
+    #[test]
+    fn test_is_server_error() {
+        // Server errors
+        assert!(NonceError::from_database_message("test").is_server_error());
+        assert!(NonceError::CryptoError("test".to_string()).is_server_error());
+
+        // Not server errors
+        assert!(!NonceError::DuplicateNonce.is_server_error());
+        assert!(!NonceError::InvalidSignature.is_server_error());
+        assert!(!NonceError::ExpiredNonce.is_server_error());
+        assert!(!NonceError::TimestampOutOfWindow.is_server_error());
+    }
+
+    #[test]
+    fn test_is_authentication_error() {
+        // Authentication errors
+        assert!(NonceError::DuplicateNonce.is_authentication_error());
+        assert!(NonceError::ExpiredNonce.is_authentication_error());
+        assert!(NonceError::InvalidSignature.is_authentication_error());
+        assert!(NonceError::TimestampOutOfWindow.is_authentication_error());
+
+        // Not authentication errors
+        assert!(!NonceError::from_database_message("test").is_authentication_error());
+        assert!(!NonceError::CryptoError("test".to_string()).is_authentication_error());
     }
 }

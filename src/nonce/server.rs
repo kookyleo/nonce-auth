@@ -1,13 +1,19 @@
 use std::sync::Arc;
+#[cfg(feature = "metrics")]
+use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hmac::Mac;
 use tokio;
 
 use super::cleanup::BoxedCleanupStrategy;
+use super::time_utils;
 use super::{CredentialVerifier, NonceError, NonceServerBuilder, NonceStorage};
 use crate::storage::MemoryStorage;
 use crate::{HmacSha256, NonceCredential};
+
+#[cfg(feature = "metrics")]
+use super::metrics::{MetricEvent, MetricsCollector, NoOpMetricsCollector};
 
 /// A server that verifies `NonceCredential`s and manages nonce storage.
 ///
@@ -21,6 +27,8 @@ pub struct NonceServer<S: NonceStorage> {
     pub(crate) time_window: Duration,
     pub(crate) storage: Arc<S>,
     pub(crate) cleanup_strategy: BoxedCleanupStrategy,
+    #[cfg(feature = "metrics")]
+    pub(crate) metrics_collector: Arc<dyn MetricsCollector>,
 }
 
 impl NonceServer<MemoryStorage> {
@@ -35,6 +43,29 @@ impl NonceServer<MemoryStorage> {
 
 impl<S: NonceStorage + 'static> NonceServer<S> {
     /// Internal constructor used by the builder.
+    #[cfg(feature = "metrics")]
+    pub(crate) fn new(
+        storage: Arc<S>,
+        default_ttl: Option<Duration>,
+        time_window: Option<Duration>,
+        cleanup_strategy: BoxedCleanupStrategy,
+        metrics_collector: Option<Arc<dyn MetricsCollector>>,
+    ) -> Self {
+        let default_ttl = default_ttl.unwrap_or(Duration::from_secs(300));
+        let time_window = time_window.unwrap_or(Duration::from_secs(60));
+        let metrics_collector =
+            metrics_collector.unwrap_or_else(|| Arc::new(NoOpMetricsCollector::new()));
+        Self {
+            default_ttl,
+            time_window,
+            storage,
+            cleanup_strategy,
+            metrics_collector,
+        }
+    }
+
+    /// Internal constructor used by the builder (non-metrics version).
+    #[cfg(not(feature = "metrics"))]
     pub(crate) fn new(
         storage: Arc<S>,
         default_ttl: Option<Duration>,
@@ -106,7 +137,34 @@ impl<S: NonceStorage + 'static> NonceServer<S> {
         nonce: &str,
         context: Option<&str>,
     ) -> Result<(), NonceError> {
-        if let Some(entry) = self.storage.get(nonce, context).await? {
+        // Check if nonce already exists
+        self.check_nonce_existence(nonce, context).await?;
+
+        // Store the nonce
+        self.store_nonce(nonce, context).await?;
+
+        // Trigger cleanup if needed
+        self.maybe_trigger_cleanup().await;
+
+        Ok(())
+    }
+
+    /// Check if nonce already exists and handle accordingly.
+    async fn check_nonce_existence(
+        &self,
+        nonce: &str,
+        context: Option<&str>,
+    ) -> Result<(), NonceError> {
+        #[cfg(feature = "metrics")]
+        let start_time = Instant::now();
+
+        let get_result = self.storage.get(nonce, context).await;
+
+        #[cfg(feature = "metrics")]
+        self.record_storage_operation("get", start_time.elapsed(), get_result.is_ok())
+            .await;
+
+        if let Some(entry) = get_result? {
             return if Self::is_time_expired(entry.created_at, self.default_ttl) {
                 Err(NonceError::ExpiredNonce)
             } else {
@@ -114,27 +172,77 @@ impl<S: NonceStorage + 'static> NonceServer<S> {
             };
         }
 
-        // Store the nonce
-        self.storage.set(nonce, context, self.default_ttl).await?;
+        Ok(())
+    }
 
-        // Check if cleanup should be triggered
+    /// Store the nonce in the storage backend.
+    async fn store_nonce(&self, nonce: &str, context: Option<&str>) -> Result<(), NonceError> {
+        #[cfg(feature = "metrics")]
+        let start_time = Instant::now();
+
+        let set_result = self.storage.set(nonce, context, self.default_ttl).await;
+
+        #[cfg(feature = "metrics")]
+        self.record_storage_operation("set", start_time.elapsed(), set_result.is_ok())
+            .await;
+
+        set_result
+    }
+
+    /// Record storage operation metrics if enabled.
+    #[cfg(feature = "metrics")]
+    async fn record_storage_operation(
+        &self,
+        operation: &str,
+        duration: std::time::Duration,
+        success: bool,
+    ) {
+        let event = MetricEvent::StorageOperation {
+            operation: operation.to_string(),
+            duration,
+            success,
+        };
+        self.metrics_collector.record_event(event).await;
+    }
+
+    /// Check cleanup strategy and trigger background cleanup if needed.
+    async fn maybe_trigger_cleanup(&self) {
         if self.cleanup_strategy.should_cleanup().await {
-            // Create a clone of storage and ttl for the background task
-            let storage_clone = Arc::clone(&self.storage);
-            let ttl = self.default_ttl;
-
-            // Spawn cleanup in background to avoid blocking the verification
-            tokio::spawn(async move {
-                if let Err(e) = Self::cleanup_expired_nonces_static(&storage_clone, ttl).await {
-                    tracing::warn!("Background cleanup failed: {}", e);
-                }
-            });
-
-            // Mark cleanup as performed
+            self.spawn_background_cleanup().await;
             self.cleanup_strategy.mark_as_cleaned().await;
         }
+    }
 
-        Ok(())
+    /// Spawn background cleanup task.
+    async fn spawn_background_cleanup(&self) {
+        let storage_clone = Arc::clone(&self.storage);
+        let ttl = self.default_ttl;
+
+        #[cfg(feature = "metrics")]
+        let metrics_clone = Arc::clone(&self.metrics_collector);
+
+        tokio::spawn(async move {
+            #[cfg(feature = "metrics")]
+            let cleanup_start_time = Instant::now();
+
+            let cleanup_result = Self::cleanup_expired_nonces_static(&storage_clone, ttl).await;
+
+            #[cfg(feature = "metrics")]
+            {
+                let duration = cleanup_start_time.elapsed();
+                if let Ok(items_cleaned) = cleanup_result {
+                    let event = MetricEvent::CleanupOperation {
+                        items_cleaned,
+                        duration,
+                    };
+                    metrics_clone.record_event(event).await;
+                }
+            }
+
+            if let Err(e) = cleanup_result {
+                tracing::warn!("Background cleanup failed: {}", e);
+            }
+        });
     }
 
     /// Cleans up expired nonces from the storage backend.
@@ -172,11 +280,7 @@ impl<S: NonceStorage + 'static> NonceServer<S> {
 
     /// Checks if a time is expired based on TTL.
     fn is_time_expired(created_at: i64, ttl: Duration) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        now - created_at > ttl.as_secs() as i64
+        time_utils::is_expired(created_at, ttl.as_secs())
     }
 }
 

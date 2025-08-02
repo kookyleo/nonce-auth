@@ -116,6 +116,46 @@ impl<'a> NonceCredentialBuilder<'a> {
         })
     }
 
+    /// Signs a structured list of data components in a guaranteed order.
+    ///
+    /// This is a safer alternative to `sign_with` that eliminates the possibility of
+    /// MAC update order mistakes. The provided data components will be processed in
+    /// the exact order they appear in the slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `data_components`: An ordered slice of byte slices to be included in the signature.
+    ///   The components will be signed after the timestamp and nonce, in the exact order provided.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::NonceClient;
+    ///
+    /// let client = NonceClient::new(b"my_secret");
+    /// let user_id = b"user123";
+    /// let payload = b"important_data";
+    /// let context = b"api_v2";
+    ///
+    /// // All components will be signed in this exact order:
+    /// // timestamp, nonce, user_id, payload, context
+    /// let credential = client.credential_builder()
+    ///     .sign_structured(&[user_id, payload, context])?;
+    /// # Ok::<(), nonce_auth::NonceError>(())
+    /// ```
+    pub fn sign_structured(self, data_components: &[&[u8]]) -> Result<NonceCredential, NonceError> {
+        self.sign_with(|mac, timestamp, nonce| {
+            // Always include timestamp and nonce first
+            mac.update(timestamp.as_bytes());
+            mac.update(nonce.as_bytes());
+
+            // Then include all data components in order
+            for component in data_components {
+                mac.update(component);
+            }
+        })
+    }
+
     /// Signs the credential using custom logic defined in a closure for advanced use cases.
     ///
     /// # Warning
@@ -408,5 +448,87 @@ mod tests {
         assert!(builder2.secret.is_none());
         assert!(builder2.nonce_generator.is_none());
         assert!(builder2.time_provider.is_none());
+    }
+
+    #[test]
+    fn test_sign_structured() {
+        let client = NonceClient::new(TEST_SECRET);
+        let user_id = b"user123";
+        let payload = b"important_data";
+        let context = b"api_v2";
+
+        let credential = client
+            .credential_builder()
+            .sign_structured(&[user_id, payload, context])
+            .unwrap();
+
+        assert!(credential.timestamp > 0);
+        assert!(!credential.nonce.is_empty());
+        assert!(!credential.signature.is_empty());
+        assert_eq!(credential.signature.len(), 64);
+
+        // Verify the signature matches the expected components
+        let expected_signature = client
+            .generate_signature(|mac| {
+                mac.update(credential.timestamp.to_string().as_bytes());
+                mac.update(credential.nonce.as_bytes());
+                mac.update(user_id);
+                mac.update(payload);
+                mac.update(context);
+            })
+            .unwrap();
+        assert_eq!(credential.signature, expected_signature);
+    }
+
+    #[test]
+    fn test_sign_structured_empty_components() {
+        let client = NonceClient::new(TEST_SECRET);
+
+        let credential = client.credential_builder().sign_structured(&[]).unwrap();
+
+        // Should work with empty components list (just timestamp + nonce)
+        let expected_signature = client
+            .generate_signature(|mac| {
+                mac.update(credential.timestamp.to_string().as_bytes());
+                mac.update(credential.nonce.as_bytes());
+            })
+            .unwrap();
+        assert_eq!(credential.signature, expected_signature);
+    }
+
+    #[test]
+    fn test_sign_structured_vs_sign_with() {
+        let client = NonceClient::builder()
+            .with_secret(TEST_SECRET)
+            .with_nonce_generator(|| "fixed-nonce".to_string())
+            .with_time_provider(|| Ok(9999999999))
+            .build();
+
+        let data1 = b"component1";
+        let data2 = b"component2";
+        let data3 = b"component3";
+
+        // Sign with structured method
+        let structured = client
+            .credential_builder()
+            .sign_structured(&[data1, data2, data3])
+            .unwrap();
+
+        // Sign with manual method (should produce same result)
+        let manual = client
+            .credential_builder()
+            .sign_with(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+                mac.update(data1);
+                mac.update(data2);
+                mac.update(data3);
+            })
+            .unwrap();
+
+        // Should produce identical signatures
+        assert_eq!(structured.signature, manual.signature);
+        assert_eq!(structured.timestamp, manual.timestamp);
+        assert_eq!(structured.nonce, manual.nonce);
     }
 }

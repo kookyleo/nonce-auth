@@ -26,6 +26,7 @@ let server = NonceServer::builder()
 
 | Method | Description | Default |
 |--------|-------------|---------|
+| `with_preset(ConfigPreset)` | Apply configuration preset | - |
 | `with_ttl(Duration)` | Set nonce time-to-live duration | 5 minutes |
 | `with_time_window(Duration)` | Set timestamp validation window | 1 minute |
 | `with_storage(Arc<T>)` | Set custom storage backend | `MemoryStorage` |
@@ -36,27 +37,37 @@ let server = NonceServer::builder()
 Built-in configuration presets for common scenarios:
 
 ```rust
-use nonce_auth::NonceConfig;
+use nonce_auth::{NonceServer, ConfigPreset};
 
-// Production: Balanced security and usability
-let config = NonceConfig::production();
-assert_eq!(config.default_ttl, Duration::from_secs(300));  // 5 minutes
-assert_eq!(config.time_window, Duration::from_secs(60));   // 1 minute
-
-// Development: Developer-friendly settings
-let config = NonceConfig::development();
-assert_eq!(config.default_ttl, Duration::from_secs(600));  // 10 minutes
-assert_eq!(config.time_window, Duration::from_secs(120));  // 2 minutes
-
-// High Security: Maximum security with shorter windows
-let config = NonceConfig::high_security();
-assert_eq!(config.default_ttl, Duration::from_secs(120));  // 2 minutes
-assert_eq!(config.time_window, Duration::from_secs(30));   // 30 seconds
-
-// Apply preset to server
+// Production: Balanced security and usability (TTL: 5min, Window: 1min)
 let server = NonceServer::builder()
-    .with_ttl(config.default_ttl)
-    .with_time_window(config.time_window)
+    .with_preset(ConfigPreset::Production)
+    .build_and_init()
+    .await?;
+
+// Development: Developer-friendly settings (TTL: 10min, Window: 2min)
+let dev_server = NonceServer::builder()
+    .with_preset(ConfigPreset::Development)
+    .build_and_init()
+    .await?;
+
+// High Security: Maximum security (TTL: 2min, Window: 30s)
+let secure_server = NonceServer::builder()
+    .with_preset(ConfigPreset::HighSecurity)
+    .build_and_init()
+    .await?;
+
+// Load from environment variables
+// Reads NONCE_AUTH_DEFAULT_TTL and NONCE_AUTH_DEFAULT_TIME_WINDOW
+let env_server = NonceServer::builder()
+    .with_preset(ConfigPreset::FromEnv)
+    .build_and_init()
+    .await?;
+
+// Override preset values
+let custom_server = NonceServer::builder()
+    .with_preset(ConfigPreset::Production)
+    .with_ttl(Duration::from_secs(600))  // Override production TTL
     .build_and_init()
     .await?;
 ```
@@ -586,6 +597,20 @@ let result = server
     .verify(b"payload")
     .await;
 
+// Structured verification with multiple components
+let user_id = b"user123";
+let payload = b"data";
+let api_version = b"v1";
+
+let credential = client.credential_builder()
+    .sign_structured(&[user_id, payload, api_version])?;
+
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(b"shared_secret")
+    .verify_structured(&[user_id, payload, api_version])
+    .await;
+
 match result {
     Ok(()) => println!("✓ Credential verified"),
     Err(e) => println!("✗ Verification failed: {}", e),
@@ -601,6 +626,42 @@ let result = server
     .with_secret(user_secret)
     .with_context(Some("api_v1"))  // Context-specific nonce isolation
     .verify(payload)
+    .await;
+
+// Dynamic secret verification with context
+async fn fetch_user_secret(user_id: &str) -> Result<Vec<u8>, NonceError> {
+    // Fetch secret from database/cache based on user_id
+    Ok(format!("secret_for_{}", user_id).into_bytes())
+}
+
+let user_id = "user123";
+let result = server
+    .credential_verifier(&credential)
+    .with_context(Some(user_id))
+    .verify_with_secret_provider(payload, |context| async move {
+        match context {
+            Some(user_id) => fetch_user_secret(&user_id).await,
+            None => Err(NonceError::CryptoError("Context required".to_string())),
+        }
+    })
+    .await;
+
+// Structured verification with dynamic secret
+let credential = client.credential_builder()
+    .sign_structured(&[user_id.as_bytes(), payload])?;
+
+let result = server
+    .credential_verifier(&credential)
+    .with_context(Some(user_id))
+    .verify_structured_with_secret_provider(
+        &[user_id.as_bytes(), payload],
+        |context| async move {
+            match context {
+                Some(user_id) => fetch_user_secret(&user_id).await,
+                None => Err(NonceError::CryptoError("Context required".to_string())),
+            }
+        }
+    )
     .await;
 
 // Custom verification logic matching custom signing
@@ -672,7 +733,10 @@ let result = server
 | `with_secret(&[u8])` | Secret key bytes | Set verification secret (required) |
 | `with_context(Option<&str>)` | Context string | Set nonce isolation context |
 | `verify(&[u8])` | Payload bytes | Standard verification |
+| `verify_structured(&[&[u8]])` | Data components | Structured data verification |
 | `verify_with<F>(F)` | MAC builder closure | Custom verification logic |
+| `verify_with_secret_provider<F>(payload, F)` | Payload, async secret provider | Dynamic secret verification |
+| `verify_structured_with_secret_provider<F>(components, F)` | Components, async secret provider | Structured + dynamic secret |
 
 ## Multi-Secret and Context Support
 
@@ -732,6 +796,7 @@ server.credential_verifier(&credential)
 
 ```rust
 use nonce_auth::NonceError;
+use std::error::Error;
 
 match server.credential_verifier(&credential)
     .with_secret(secret)
@@ -760,9 +825,12 @@ match server.credential_verifier(&credential)
         println!("⚠ Request timestamp out of range - check clock synchronization");
     },
     
-    Err(NonceError::DatabaseError(msg)) => {
-        // Storage backend error
-        println!("⚠ Storage error: {}", msg);
+    Err(NonceError::DatabaseError(err)) => {
+        // Storage backend error - can access original error
+        println!("⚠ Storage error: {}", err);
+        if let Some(source) = err.source() {
+            println!("  Caused by: {}", source);
+        }
     },
     
     Err(NonceError::CryptoError(msg)) => {
@@ -770,6 +838,21 @@ match server.credential_verifier(&credential)
         println!("⚠ Crypto error: {}", msg);
     },
 }
+
+// Using error utility methods
+let error = NonceError::DuplicateNonce;
+println!("Error code: {}", error.code());                      // "duplicate_nonce"
+println!("Is temporary: {}", error.is_temporary());           // false
+println!("Is auth error: {}", error.is_authentication_error()); // true
+
+let db_error = NonceError::from_database_message("Connection timeout");
+println!("Error code: {}", db_error.code());                 // "database_error"
+println!("Is temporary: {}", db_error.is_temporary());       // true
+println!("Is auth error: {}", db_error.is_authentication_error()); // false
+
+// Error classification methods
+println!("Is client error: {}", error.is_client_error());   // true for auth errors
+println!("Is server error: {}", db_error.is_server_error()); // true for system errors
 ```
 
 ### Advanced Error Handling Patterns
@@ -918,10 +1001,8 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Configure server with production settings
-    let config = NonceConfig::production();
     let server = NonceServer::builder()
-        .with_ttl(config.default_ttl)
-        .with_time_window(config.time_window)
+        .with_preset(ConfigPreset::Production)
         .with_storage(Arc::new(setup_persistent_storage().await?))
         .build_and_init()
         .await?;

@@ -12,13 +12,21 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 pub mod nonce;
+pub mod signature {
+    //! Pluggable signature algorithms for cryptographic operations.
+    pub use crate::nonce::signature::*;
+}
 pub mod storage {
     //! Pluggable storage backends for nonce persistence.
     pub use crate::nonce::storage::*;
 }
 
 // Re-export key types for easy access.
-pub use nonce::{NonceClient, NonceConfig, NonceError, NonceServer};
+pub use nonce::{
+    AsyncNonceClient, ConfigPreset, NonceClient, NonceConfig, NonceError, NonceServer,
+    async_nonce_generator, async_secret_provider, async_time_provider, static_secret_provider,
+    sync_nonce_generator, sync_time_provider,
+};
 
 /// Internal type alias for HMAC-SHA256 operations.
 type HmacSha256 = Hmac<Sha256>;
@@ -42,7 +50,9 @@ pub struct NonceCredential {
 
 #[cfg(test)]
 mod tests {
+    use crate::ConfigPreset;
     use crate::nonce::{NonceClient, NonceError, NonceServer};
+    use hmac::Mac;
 
     #[tokio::test]
     async fn test_client_server_separation() {
@@ -209,7 +219,302 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Check that cleanup was triggered
-        assert!(cleanup_triggered.load(Ordering::SeqCst), 
-                "Cleanup strategy should have been triggered after successful verification");
+        assert!(
+            cleanup_triggered.load(Ordering::SeqCst),
+            "Cleanup strategy should have been triggered after successful verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_structured_signing_and_verification() {
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+
+        let user_id = b"user123";
+        let payload = b"important_data";
+        let context = b"api_v2";
+
+        // Client creates a credential using structured signing
+        let credential = client
+            .credential_builder()
+            .sign_structured(&[user_id, payload, context])
+            .unwrap();
+
+        // Server verifies using structured verification
+        let result = server
+            .credential_verifier(&credential)
+            .with_secret(b"test_secret")
+            .verify_structured(&[user_id, payload, context])
+            .await;
+
+        assert!(result.is_ok());
+
+        // Same nonce should be rejected
+        let result = server
+            .credential_verifier(&credential)
+            .with_secret(b"test_secret")
+            .verify_structured(&[user_id, payload, context])
+            .await;
+
+        assert!(matches!(result, Err(NonceError::DuplicateNonce)));
+    }
+
+    #[tokio::test]
+    async fn test_structured_vs_manual_compatibility() {
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+
+        let data1 = b"component1";
+        let data2 = b"component2";
+
+        // Create credential using structured method
+        let structured_credential = client
+            .credential_builder()
+            .sign_structured(&[data1, data2])
+            .unwrap();
+
+        // Verify using manual method (should work)
+        let result = server
+            .credential_verifier(&structured_credential)
+            .with_secret(b"test_secret")
+            .verify_with(|mac| {
+                mac.update(structured_credential.timestamp.to_string().as_bytes());
+                mac.update(structured_credential.nonce.as_bytes());
+                mac.update(data1);
+                mac.update(data2);
+            })
+            .await;
+
+        assert!(result.is_ok());
+
+        // Create credential using manual method
+        let manual_credential = client
+            .credential_builder()
+            .sign_with(|mac, timestamp, nonce| {
+                mac.update(timestamp.as_bytes());
+                mac.update(nonce.as_bytes());
+                mac.update(data1);
+                mac.update(data2);
+            })
+            .unwrap();
+
+        // Verify using structured method (should work)
+        let result = server
+            .credential_verifier(&manual_credential)
+            .with_secret(b"test_secret")
+            .verify_structured(&[data1, data2])
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_structured_order_matters() {
+        let client = NonceClient::new(b"test_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+
+        let data1 = b"component1";
+        let data2 = b"component2";
+
+        // Create credential with order [data1, data2]
+        let credential = client
+            .credential_builder()
+            .sign_structured(&[data1, data2])
+            .unwrap();
+
+        // Verify with correct order should work
+        let result = server
+            .credential_verifier(&credential)
+            .with_secret(b"test_secret")
+            .verify_structured(&[data1, data2])
+            .await;
+
+        assert!(result.is_ok());
+
+        // Create another credential with same data but different order
+        let credential2 = client
+            .credential_builder()
+            .sign_structured(&[data2, data1])
+            .unwrap();
+
+        // Verify first credential with wrong order should fail
+        let result = server
+            .credential_verifier(&credential2)
+            .with_secret(b"test_secret")
+            .verify_structured(&[data1, data2])
+            .await;
+
+        assert!(matches!(result, Err(NonceError::InvalidSignature)));
+    }
+
+    #[tokio::test]
+    async fn test_config_presets() {
+        use std::time::Duration;
+
+        // Test Production preset
+        let _server = NonceServer::builder()
+            .with_preset(ConfigPreset::Production)
+            .build_and_init()
+            .await
+            .unwrap();
+        // Verify it uses production settings (can't directly access private fields, but test functionality)
+
+        // Test Development preset
+        let _dev_server = NonceServer::builder()
+            .with_preset(ConfigPreset::Development)
+            .build_and_init()
+            .await
+            .unwrap();
+
+        // Test HighSecurity preset
+        let _secure_server = NonceServer::builder()
+            .with_preset(ConfigPreset::HighSecurity)
+            .build_and_init()
+            .await
+            .unwrap();
+
+        // Test FromEnv preset (will use defaults since no env vars set)
+        let _env_server = NonceServer::builder()
+            .with_preset(ConfigPreset::FromEnv)
+            .build_and_init()
+            .await
+            .unwrap();
+
+        // Test preset override
+        let _custom_server = NonceServer::builder()
+            .with_preset(ConfigPreset::Production)
+            .ttl(Duration::from_secs(600)) // Override production TTL
+            .build_and_init()
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_context_based_dynamic_secret() {
+        let client = NonceClient::new(b"user_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+        let payload = b"important_data";
+        let user_id = "user123";
+
+        // Create credential
+        let credential = client.credential_builder().sign(payload).unwrap();
+
+        // Mock secret provider that simulates database lookup
+        async fn get_secret_for_user(user_id: &str) -> Result<Vec<u8>, NonceError> {
+            match user_id {
+                "user123" => Ok(b"user_secret".to_vec()),
+                "user456" => Ok(b"different_secret".to_vec()),
+                _ => Err(NonceError::from_database_message("User not found")),
+            }
+        }
+
+        // Verify with context + secret provider (clean separation)
+        let result = server
+            .credential_verifier(&credential)
+            .with_context(Some(user_id))
+            .verify_with_secret_provider(payload, |context| async move {
+                match context {
+                    Some(user_id) => get_secret_for_user(&user_id).await,
+                    None => Err(NonceError::CryptoError("Context required".to_string())),
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+
+        // Same nonce should be rejected for same context
+        let result = server
+            .credential_verifier(&credential)
+            .with_context(Some(user_id))
+            .verify_with_secret_provider(payload, |context| async move {
+                match context {
+                    Some(user_id) => get_secret_for_user(&user_id).await,
+                    None => Err(NonceError::CryptoError("Context required".to_string())),
+                }
+            })
+            .await;
+
+        assert!(matches!(result, Err(NonceError::DuplicateNonce)));
+
+        // But should work in different context
+        let credential2 = client.credential_builder().sign(payload).unwrap();
+        let result = server
+            .credential_verifier(&credential2)
+            .with_context(Some("different_context"))
+            .verify_with_secret_provider(payload, |_context| async move {
+                get_secret_for_user("user123").await // Same secret, different context
+            })
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_context_based_structured_verification() {
+        let client = NonceClient::new(b"user_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+
+        let user_id = "user123";
+        let payload = b"important_data";
+
+        // Create credential with structured signing (include user_id in signature)
+        let credential = client
+            .credential_builder()
+            .sign_structured(&[user_id.as_bytes(), payload])
+            .unwrap();
+
+        // Mock secret provider
+        async fn get_secret_for_user(user_id: &str) -> Result<Vec<u8>, NonceError> {
+            match user_id {
+                "user123" => Ok(b"user_secret".to_vec()),
+                _ => Err(NonceError::from_database_message("User not found")),
+            }
+        }
+
+        // Verify with context + structured verification + secret provider
+        let result = server
+            .credential_verifier(&credential)
+            .with_context(Some(user_id))
+            .verify_structured_with_secret_provider(
+                &[user_id.as_bytes(), payload],
+                |context| async move {
+                    match context {
+                        Some(user_id) => get_secret_for_user(&user_id).await,
+                        None => Err(NonceError::CryptoError("Context required".to_string())),
+                    }
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_context_secret_error_handling() {
+        let client = NonceClient::new(b"user_secret");
+        let server = NonceServer::builder().build_and_init().await.unwrap();
+        let payload = b"important_data";
+
+        let credential = client.credential_builder().sign(payload).unwrap();
+
+        // Test secret provider that returns an error
+        let result = server
+            .credential_verifier(&credential)
+            .with_context(Some("nonexistent_user"))
+            .verify_with_secret_provider(payload, |_context| async {
+                Err(NonceError::from_database_message("User not found"))
+            })
+            .await;
+
+        assert!(matches!(result, Err(NonceError::DatabaseError(_))));
+
+        // Test secret provider that returns wrong secret
+        let result = server
+            .credential_verifier(&credential)
+            .with_context(Some("user123"))
+            .verify_with_secret_provider(payload, |_context| async { Ok(b"wrong_secret".to_vec()) })
+            .await;
+
+        assert!(matches!(result, Err(NonceError::InvalidSignature)));
     }
 }
