@@ -15,7 +15,7 @@ pub struct CredentialVerifier<'a, S: NonceStorage> {
     secret: Option<&'a [u8]>,
 }
 
-impl<'a, S: NonceStorage> CredentialVerifier<'a, S> {
+impl<'a, S: NonceStorage + 'static> CredentialVerifier<'a, S> {
     /// Creates a new verifier.
     pub(crate) fn new(server: &'a NonceServer<S>, credential: &'a NonceCredential) -> Self {
         Self {

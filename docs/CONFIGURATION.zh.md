@@ -119,10 +119,88 @@ println!("服务器时间窗口: {:?}", server.time_window());
 let stats = server.storage().get_stats().await?;
 println!("总 nonce 记录数: {}", stats.total_records);
 println!("存储后端: {}", stats.backend_info);
+```
 
-// 手动清理过期的 nonces
+### 自动清理配置
+
+服务器包含在后台运行的自动清理功能：
+
+#### 默认自动清理
+
+默认情况下，服务器使用混合清理策略，在以下情况下触发清理：
+- 处理了 100 个请求，或
+- 距离上次清理已过去 5 分钟
+
+```rust
+// 使用默认自动清理的服务器
+let server = NonceServer::builder()
+    .build_and_init()
+    .await?;
+// 清理在后台自动进行
+```
+
+#### 自定义清理阈值
+
+自定义混合清理策略的阈值：
+
+```rust
+use std::time::Duration;
+
+let server = NonceServer::builder()
+    .with_hybrid_cleanup_thresholds(
+        50,                       // 每 50 个请求清理一次
+        Duration::from_secs(120)  // 或每 2 分钟清理一次
+    )
+    .build_and_init()
+    .await?;
+```
+
+#### 自定义清理策略
+
+提供完全自定义的清理逻辑：
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// 示例：基于内存使用的清理
+let server = NonceServer::builder()
+    .with_custom_cleanup_strategy(|| async {
+        // 您的自定义逻辑
+        let memory_usage = get_current_memory_usage();
+        memory_usage > 80 // 内存使用超过 80% 时清理
+    })
+    .build_and_init()
+    .await?;
+
+// 示例：渐进式清理频率
+let request_count = Arc::new(AtomicU32::new(0));
+let count_clone = Arc::clone(&request_count);
+
+let server = NonceServer::builder()
+    .with_custom_cleanup_strategy(move || {
+        let count = count_clone.fetch_add(1, Ordering::SeqCst);
+        async move {
+            // 随着负载增加，更频繁地清理
+            match count {
+                0..=100 => count % 100 == 0,    // 每 100 个请求
+                101..=500 => count % 50 == 0,   // 每 50 个请求
+                _ => count % 25 == 0,            // 每 25 个请求
+            }
+        }
+    })
+    .build_and_init()
+    .await?;
+```
+
+#### 手动清理
+
+虽然推荐使用自动清理，但如果需要，您仍然可以手动触发清理：
+
+```rust
+// 手动清理（由于自动清理，很少需要）
 let deleted_count = server.cleanup_expired_nonces(Duration::from_secs(300)).await?;
-println!("清理了 {} 个过期的 nonces", deleted_count);
+println!("手动清理了 {} 个过期的 nonces", deleted_count);
 ```
 
 ## 存储后端配置
@@ -672,16 +750,8 @@ let server = NonceServer::builder()
     .build_and_init()
     .await?;
 
-// 定期清理防止存储膨胀
-tokio::spawn(async move {
-    let mut interval = tokio::time::interval(Duration::from_secs(3600)); // 每小时
-    loop {
-        interval.tick().await;
-        if let Err(e) = server.cleanup_expired_nonces(Duration::from_secs(300)).await {
-            eprintln!("清理失败: {}", e);
-        }
-    }
-});
+// 自动清理默认启用
+// 无需手动清理任务 - 服务器自动处理
 ```
 
 ## 完整示例：生产环境设置
@@ -712,18 +782,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build();
 
-    // 3. 定期维护
-    let server_clone = server.clone();
-    tokio::spawn(async move {
-        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(3600));
-        loop {
-            cleanup_interval.tick().await;
-            match server_clone.cleanup_expired_nonces(config.default_ttl).await {
-                Ok(count) => println!("清理了 {} 个过期 nonces", count),
-                Err(e) => eprintln!("清理错误: {}", e),
-            }
-        }
-    });
+    // 3. 自动清理默认启用
+    // 服务器将基于默认的混合策略（每 100 个请求或每 5 分钟）
+    // 自动清理过期的 nonces
 
     // 4. 处理请求
     let payload = b"important_request_data";

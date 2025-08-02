@@ -2,18 +2,25 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hmac::Mac;
+use tokio;
 
+use super::cleanup::BoxedCleanupStrategy;
 use super::{CredentialVerifier, NonceError, NonceServerBuilder, NonceStorage};
 use crate::storage::MemoryStorage;
 use crate::{HmacSha256, NonceCredential};
 
 /// A server that verifies `NonceCredential`s and manages nonce storage.
 ///
+/// The server includes automatic nonce cleanup functionality that triggers
+/// based on configurable strategies. By default, it uses a hybrid approach
+/// that performs cleanup after a certain number of requests or elapsed time.
+///
 /// To create an instance, use the `NonceServer::builder()` method.
 pub struct NonceServer<S: NonceStorage> {
     pub(crate) default_ttl: Duration,
     pub(crate) time_window: Duration,
     pub(crate) storage: Arc<S>,
+    pub(crate) cleanup_strategy: BoxedCleanupStrategy,
 }
 
 impl NonceServer<MemoryStorage> {
@@ -26,12 +33,13 @@ impl NonceServer<MemoryStorage> {
     }
 }
 
-impl<S: NonceStorage> NonceServer<S> {
+impl<S: NonceStorage + 'static> NonceServer<S> {
     /// Internal constructor used by the builder.
     pub(crate) fn new(
         storage: Arc<S>,
         default_ttl: Option<Duration>,
         time_window: Option<Duration>,
+        cleanup_strategy: BoxedCleanupStrategy,
     ) -> Self {
         let default_ttl = default_ttl.unwrap_or(Duration::from_secs(300));
         let time_window = time_window.unwrap_or(Duration::from_secs(60));
@@ -39,6 +47,7 @@ impl<S: NonceStorage> NonceServer<S> {
             default_ttl,
             time_window,
             storage,
+            cleanup_strategy,
         }
     }
 
@@ -88,6 +97,10 @@ impl<S: NonceStorage> NonceServer<S> {
     }
 
     /// Verifies that a nonce is valid and hasn't been used, then stores it.
+    ///
+    /// After successful verification and storage, this method checks the cleanup
+    /// strategy to determine if automatic cleanup should be triggered. If so,
+    /// cleanup is performed asynchronously in the background.
     pub(crate) async fn verify_and_consume_nonce(
         &self,
         nonce: &str,
@@ -100,17 +113,46 @@ impl<S: NonceStorage> NonceServer<S> {
                 Err(NonceError::DuplicateNonce)
             };
         }
-        self.storage.set(nonce, context, self.default_ttl).await
+
+        // Store the nonce
+        self.storage.set(nonce, context, self.default_ttl).await?;
+
+        // Check if cleanup should be triggered
+        if self.cleanup_strategy.should_cleanup().await {
+            // Create a clone of storage and ttl for the background task
+            let storage_clone = Arc::clone(&self.storage);
+            let ttl = self.default_ttl;
+
+            // Spawn cleanup in background to avoid blocking the verification
+            tokio::spawn(async move {
+                if let Err(e) = Self::cleanup_expired_nonces_static(&storage_clone, ttl).await {
+                    tracing::warn!("Background cleanup failed: {}", e);
+                }
+            });
+
+            // Mark cleanup as performed
+            self.cleanup_strategy.mark_as_cleaned().await;
+        }
+
+        Ok(())
     }
 
     /// Cleans up expired nonces from the storage backend.
     pub async fn cleanup_expired_nonces(&self, ttl: Duration) -> Result<usize, NonceError> {
+        Self::cleanup_expired_nonces_static(&self.storage, ttl).await
+    }
+
+    /// Static version of cleanup_expired_nonces for use in background tasks.
+    async fn cleanup_expired_nonces_static<T: NonceStorage>(
+        storage: &Arc<T>,
+        ttl: Duration,
+    ) -> Result<usize, NonceError> {
         let cutoff_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| NonceError::CryptoError(format!("System clock error: {e}")))?
             .as_secs() as i64
             - ttl.as_secs() as i64;
-        self.storage.cleanup_expired(cutoff_time).await
+        storage.cleanup_expired(cutoff_time).await
     }
 
     /// Returns the configured default TTL for nonce records.

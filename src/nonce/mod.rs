@@ -1,3 +1,4 @@
+pub mod cleanup;
 mod client;
 mod config;
 mod error;
@@ -6,6 +7,9 @@ mod server_builder;
 pub mod storage;
 mod verifier;
 
+pub use cleanup::{
+    BoxedCleanupStrategy, CleanupStrategy, CustomCleanupStrategy, HybridCleanupStrategy,
+};
 pub use client::NonceClient;
 pub use config::NonceConfig;
 pub use error::NonceError;

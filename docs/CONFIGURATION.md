@@ -119,10 +119,88 @@ println!("Server time window: {:?}", server.time_window());
 let stats = server.storage().get_stats().await?;
 println!("Total nonce records: {}", stats.total_records);
 println!("Storage backend: {}", stats.backend_info);
+```
 
-// Manual cleanup of expired nonces
+### Automatic Cleanup Configuration
+
+The server includes automatic cleanup functionality that runs in the background:
+
+#### Default Automatic Cleanup
+
+By default, the server uses a hybrid cleanup strategy that triggers cleanup when:
+- 100 requests have been processed, OR
+- 5 minutes have elapsed since the last cleanup
+
+```rust
+// Server with default automatic cleanup
+let server = NonceServer::builder()
+    .build_and_init()
+    .await?;
+// Cleanup happens automatically in the background
+```
+
+#### Custom Cleanup Thresholds
+
+Customize the hybrid cleanup strategy thresholds:
+
+```rust
+use std::time::Duration;
+
+let server = NonceServer::builder()
+    .with_hybrid_cleanup_thresholds(
+        50,                       // Cleanup every 50 requests
+        Duration::from_secs(120)  // OR every 2 minutes
+    )
+    .build_and_init()
+    .await?;
+```
+
+#### Custom Cleanup Strategy
+
+Provide completely custom cleanup logic:
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// Example: Cleanup based on memory usage
+let server = NonceServer::builder()
+    .with_custom_cleanup_strategy(|| async {
+        // Your custom logic here
+        let memory_usage = get_current_memory_usage();
+        memory_usage > 80 // Cleanup when memory usage exceeds 80%
+    })
+    .build_and_init()
+    .await?;
+
+// Example: Progressive cleanup frequency
+let request_count = Arc::new(AtomicU32::new(0));
+let count_clone = Arc::clone(&request_count);
+
+let server = NonceServer::builder()
+    .with_custom_cleanup_strategy(move || {
+        let count = count_clone.fetch_add(1, Ordering::SeqCst);
+        async move {
+            // Cleanup more frequently as load increases
+            match count {
+                0..=100 => count % 100 == 0,    // Every 100 requests
+                101..=500 => count % 50 == 0,   // Every 50 requests
+                _ => count % 25 == 0,            // Every 25 requests
+            }
+        }
+    })
+    .build_and_init()
+    .await?;
+```
+
+#### Manual Cleanup
+
+While automatic cleanup is recommended, you can still trigger cleanup manually if needed:
+
+```rust
+// Manual cleanup (rarely needed due to automatic cleanup)
 let deleted_count = server.cleanup_expired_nonces(Duration::from_secs(300)).await?;
-println!("Cleaned up {} expired nonces", deleted_count);
+println!("Manually cleaned up {} expired nonces", deleted_count);
 ```
 
 ## Storage Backend Configuration
@@ -826,16 +904,8 @@ let server = NonceServer::builder()
     .build_and_init()
     .await?;
 
-// Regular cleanup to prevent storage bloat
-tokio::spawn(async move {
-    let mut interval = tokio::time::interval(Duration::from_secs(3600)); // Every hour
-    loop {
-        interval.tick().await;
-        if let Err(e) = server.cleanup_expired_nonces(Duration::from_secs(300)).await {
-            eprintln!("Cleanup failed: {}", e);
-        }
-    }
-});
+// Automatic cleanup is enabled by default
+// No need for manual cleanup tasks - the server handles it automatically
 ```
 
 ## Complete Example: Production Setup
@@ -866,18 +936,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build();
 
-    // 3. Regular maintenance
-    let server_clone = server.clone();
-    tokio::spawn(async move {
-        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(3600));
-        loop {
-            cleanup_interval.tick().await;
-            match server_clone.cleanup_expired_nonces(config.default_ttl).await {
-                Ok(count) => println!("Cleaned up {} expired nonces", count),
-                Err(e) => eprintln!("Cleanup error: {}", e),
-            }
-        }
-    });
+    // 3. Automatic cleanup is enabled by default
+    // The server will automatically clean up expired nonces based on the
+    // default hybrid strategy (every 100 requests OR every 5 minutes)
 
     // 4. Handle requests
     let payload = b"important_request_data";

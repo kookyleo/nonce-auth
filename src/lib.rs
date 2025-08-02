@@ -110,7 +110,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_timestamp_validation() {
-        let client = NonceClient::new(b"test_secret");
         let server = NonceServer::builder()
             .with_time_window(std::time::Duration::from_secs(1))
             .build_and_init()
@@ -118,15 +117,20 @@ mod tests {
             .unwrap();
         let payload = b"test_payload";
 
-        // Create credential with old timestamp
-        let mut credential = client.credential_builder().sign(payload).unwrap();
-
-        // Simulate old timestamp (2 seconds ago, but time window is 1 second)
-        credential.timestamp = std::time::SystemTime::now()
+        // Create a client with a fixed old timestamp provider
+        let old_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-            - 2;
+            - 2; // 2 seconds ago
+
+        let client = NonceClient::builder()
+            .with_secret(b"test_secret")
+            .with_time_provider(move || Ok(old_timestamp))
+            .build();
+
+        // Create credential with the old timestamp
+        let credential = client.credential_builder().sign(payload).unwrap();
 
         let result = server
             .credential_verifier(&credential)
@@ -166,5 +170,46 @@ mod tests {
         assert_eq!(credential.timestamp, deserialized.timestamp);
         assert_eq!(credential.nonce, deserialized.nonce);
         assert_eq!(credential.signature, deserialized.signature);
+    }
+
+    #[tokio::test]
+    async fn test_automatic_cleanup_trigger() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let cleanup_triggered = Arc::new(AtomicBool::new(false));
+        let cleanup_triggered_clone = Arc::clone(&cleanup_triggered);
+
+        // Create server with custom cleanup strategy that sets a flag
+        let server = NonceServer::builder()
+            .with_custom_cleanup_strategy(move || {
+                let flag = Arc::clone(&cleanup_triggered_clone);
+                async move {
+                    flag.store(true, Ordering::SeqCst);
+                    true // Always trigger cleanup
+                }
+            })
+            .build_and_init()
+            .await
+            .unwrap();
+
+        let client = NonceClient::new(b"test_secret");
+        let credential = client.credential_builder().sign(b"test").unwrap();
+
+        // Verify credential (should trigger cleanup check)
+        server
+            .credential_verifier(&credential)
+            .with_secret(b"test_secret")
+            .verify(b"test")
+            .await
+            .unwrap();
+
+        // Give background task time to run
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Check that cleanup was triggered
+        assert!(cleanup_triggered.load(Ordering::SeqCst), 
+                "Cleanup strategy should have been triggered after successful verification");
     }
 }

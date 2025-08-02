@@ -95,19 +95,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total Records: {}", stats.total_records);
     println!();
 
-    // 6. Demonstrate cleanup performance
-    println!("=== Cleanup Performance ===\n");
-    let cleanup_start = std::time::Instant::now();
-    let deleted_count = server
-        .cleanup_expired_nonces(Duration::from_secs(1))
-        .await?;
-    let cleanup_duration = cleanup_start.elapsed();
+    // 6. Demonstrate automatic cleanup configuration
+    println!("=== Automatic Cleanup Configuration ===\n");
+    println!("🔄 The server is configured with automatic cleanup:");
+    println!("   - Default: Every 100 requests OR every 5 minutes");
+    println!("   - Cleanup runs in background without blocking authentication");
+    println!("   - You can customize thresholds or provide custom cleanup logic");
+    println!();
 
-    println!("✓ Cleaned up {deleted_count} expired nonces in {cleanup_duration:?}");
-
-    // Show updated stats
-    let stats_after = server.storage().get_stats().await?;
-    println!("✓ Records after cleanup: {}", stats_after.total_records);
+    // Show example of how to customize cleanup (in comments since server is already built)
+    println!("📝 Examples of custom cleanup configuration:");
+    println!("   // Cleanup every 50 requests or every 2 minutes:");
+    println!("   // .with_hybrid_cleanup_thresholds(50, Duration::from_secs(120))");
+    println!();
+    println!("   // Custom cleanup strategy:");
+    println!("   // .with_custom_cleanup_strategy(|| async {{ /* your logic */ true }})");
     println!();
 
     // 7. Context isolation demonstration
@@ -158,8 +160,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   - Redis: Distributed, good for multi-instance apps");
     println!("2. Adjust TTL based on security vs usability trade-offs");
     println!("3. Use context isolation for different API endpoints");
-    println!("4. Regular cleanup prevents storage bloat");
-    println!("5. Monitor storage statistics for performance insights");
+    println!("4. Automatic cleanup prevents storage bloat with zero configuration");
+    println!("5. Customize cleanup thresholds based on your application's request patterns");
+    println!("6. Monitor storage statistics for performance insights");
 
     Ok(())
 }
