@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Configuration & Examples
 
-- For detailed configuration of TTL, time windows, and storage backends, see [CONFIGURATION.md](CONFIGURATION.md).
+- For detailed configuration of TTL, time windows, and storage backends, see [CONFIGURATION.md](docs/CONFIGURATION.md).
 - For more advanced usage, including a full web server implementation, see the [examples](examples/) directory.
 
 ## License

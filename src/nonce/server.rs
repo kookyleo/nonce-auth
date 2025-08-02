@@ -62,7 +62,7 @@ impl<S: NonceStorage> NonceServer<S> {
     pub(crate) fn verify_timestamp(&self, timestamp: u64) -> Result<(), NonceError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| NonceError::CryptoError(format!("System clock error: {}", e)))?
             .as_secs();
         let time_diff = now.abs_diff(timestamp);
         if time_diff > self.time_window.as_secs() {

@@ -4,22 +4,18 @@
 
 ## 服务端配置
 
-`NonceServer` 的配置通过 `NonceServer::new` 函数完成，该函数接受可选的 `Duration` 值作为 TTL 和时间窗口。
+`NonceServer` 的配置通过构建器模式完成，允许自定义 TTL 和时间窗口。
 
 ```rust
-use nonce_auth::{NonceServer, storage::MemoryStorage};
-use std::sync::Arc;
+use nonce_auth::NonceServer;
 use std::time::Duration;
 
-let storage = Arc::new(MemoryStorage::new());
-
 // 示例：自定义10分钟的 TTL 和 2分钟的时间窗口。
-let server = NonceServer::new(
-    b"your-secret-key",
-    storage,
-    Some(Duration::from_secs(600)),  // 自定义 TTL
-    Some(Duration::from_secs(120)),  // 自定义时间窗口
-);
+let server = NonceServer::builder(b"your-secret-key")
+    .with_ttl(Duration::from_secs(600))         // 自定义 TTL
+    .with_time_window(Duration::from_secs(120)) // 自定义时间窗口
+    .build_and_init()
+    .await?;
 ```
 
 - **`default_ttl`**: `Option<Duration>`
@@ -30,9 +26,33 @@ let server = NonceServer::new(
   - **默认值**: `Some(Duration::from_secs(60))` (1 分钟)
   - **描述**: 服务器时钟与传入凭证上的时间戳之间允许的最大时间差。
 
+### 配置预设
+
+库提供了针对常见使用场景的内置配置预设：
+
+```rust
+use nonce_auth::NonceConfig;
+
+// 生产环境：5分钟 TTL，1分钟窗口 - 平衡安全性和可用性
+let config = NonceConfig::production();
+
+// 开发环境：10分钟 TTL，2分钟窗口 - 对开发者友好
+let config = NonceConfig::development();
+
+// 高安全性：2分钟 TTL，30秒窗口 - 最大安全性
+let config = NonceConfig::high_security();
+
+// 将配置应用到服务器
+let server = NonceServer::builder(b"your-secret-key")
+    .with_ttl(config.default_ttl)
+    .with_time_window(config.time_window)
+    .build_and_init()
+    .await?;
+```
+
 ### 环境变量
 
-这些参数也可以通过环境变量进行配置。如果在 `NonceServer::new` 中未提供值，则会使用环境变量。
+这些参数也可以通过环境变量进行配置。环境变量将作为构建器的默认值使用：
 
 - `NONCE_AUTH_DEFAULT_TTL`: 覆盖默认的 TTL (单位：秒)。
 - `NONCE_AUTH_DEFAULT_TIME_WINDOW`: 覆盖默认的时间窗口 (单位：秒)。
@@ -49,13 +69,15 @@ export NONCE_AUTH_DEFAULT_TIME_WINDOW=120
 
 ### 内存存储 (默认)
 
-适用于测试、示例或不需要持久化的单实例应用。
+默认存储后端是 `MemoryStorage`，当您使用 `NonceServer::builder()` 创建服务器时会自动使用。这适用于测试、示例或不需要持久化的单实例应用。
 
 ```rust
-use nonce_auth::storage::MemoryStorage;
-use std::sync::Arc;
+use nonce_auth::NonceServer;
 
-let storage = Arc::new(MemoryStorage::new());
+// 默认使用 MemoryStorage
+let server = NonceServer::builder(b"your-secret-key")
+    .build_and_init()
+    .await?;
 ```
 
 ### 自定义存储 (例如 SQLite, Redis)
@@ -80,5 +102,13 @@ impl NonceStorage for MyCustomStorage {
     # async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> { todo!() }
     # async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> { todo!() }
     # async fn get_stats(&self) -> Result<StorageStats, NonceError> { todo!() }
+    # async fn init(&self) -> Result<(), NonceError> { Ok(()) }
 }
+
+// 使用构建器模式使用自定义存储
+let server = NonceServer::builder(b"your-secret-key")
+    .with_storage(Arc::new(MyCustomStorage))
+    .build_and_init()
+    .await?;
+```
 ```

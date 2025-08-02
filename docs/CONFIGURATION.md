@@ -26,9 +26,33 @@ let server = NonceServer::builder(b"your-secret-key")
   - **Default**: `Some(Duration::from_secs(60))` (1 minute)
   - **Description**: The allowed time difference between the server's clock and the timestamp on an incoming credential.
 
+### Configuration Presets
+
+The library provides built-in configuration presets for common use cases:
+
+```rust
+use nonce_auth::NonceConfig;
+
+// Production: 5min TTL, 1min window - balanced security/usability
+let config = NonceConfig::production();
+
+// Development: 10min TTL, 2min window - developer-friendly  
+let config = NonceConfig::development();
+
+// High Security: 2min TTL, 30sec window - maximum security
+let config = NonceConfig::high_security();
+
+// Apply configuration to server
+let server = NonceServer::builder(b"your-secret-key")
+    .with_ttl(config.default_ttl)
+    .with_time_window(config.time_window)
+    .build_and_init()
+    .await?;
+```
+
 ### Environment Variables
 
-These parameters can also be configured via environment variables, which will be used if no value is provided to `NonceServer::new`.
+These parameters can also be configured via environment variables, which will be used as defaults for the builder:
 
 - `NONCE_AUTH_DEFAULT_TTL`: Overrides the default TTL in seconds.
 - `NONCE_AUTH_DEFAULT_TIME_WINDOW`: Overrides the default time window in seconds.

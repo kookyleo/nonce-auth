@@ -115,7 +115,7 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     
     <div class="info">
         <h3>Signature Formula:</h3>
-        <code>signature = HMAC-SHA256(psk, timestamp + nonce)</code>
+        <code>signature = HMAC-SHA256(psk, timestamp + nonce + payload)</code>
     </div>
     
     <div class="form-group">
@@ -181,7 +181,22 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
                         ['sign']
                     );
                     
-                    const data = new TextEncoder().encode(timestamp + nonce + message);
+                    // Match the Rust server's MAC update pattern:
+                    // mac.update(timestamp.to_string().as_bytes())
+                    // mac.update(nonce.as_bytes())  
+                    // mac.update(payload.as_bytes())
+                    const encoder = new TextEncoder();
+                    const timestampBytes = encoder.encode(timestamp.toString());
+                    const nonceBytes = encoder.encode(nonce);
+                    const messageBytes = encoder.encode(message);
+                    
+                    // Concatenate the byte arrays to match Rust's MAC.update() sequence
+                    const totalLength = timestampBytes.length + nonceBytes.length + messageBytes.length;
+                    const data = new Uint8Array(totalLength);
+                    data.set(timestampBytes, 0);
+                    data.set(nonceBytes, timestampBytes.length);
+                    data.set(messageBytes, timestampBytes.length + nonceBytes.length);
+                    
                     const signature = await crypto.subtle.sign('HMAC', key, data);
                     
                     return Array.from(new Uint8Array(signature))

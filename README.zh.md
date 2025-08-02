@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 配置与示例
 
-- 关于 TTL、时间窗口和存储后端的详细配置，请参阅 [CONFIGURATION.zh.md](CONFIGURATION.zh.md)。
+- 关于 TTL、时间窗口和存储后端的详细配置，请参阅 [CONFIGURATION.zh.md](docs/CONFIGURATION.zh.md)。
 - 更多高级用法，包括一个完整的 Web 服务器实现，请参阅 [examples](examples/) 目录。
 
 ## 许可证

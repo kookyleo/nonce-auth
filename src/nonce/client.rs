@@ -109,7 +109,7 @@ impl<'a> NonceCredentialBuilder<'a> {
     {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| NonceError::CryptoError(format!("System clock error: {}", e)))?
             .as_secs();
         let nonce = uuid::Uuid::new_v4().to_string();
 
