@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let payload = b"important_api_request_data";
 
     // 创建服务端（默认使用内存存储）
-    let server = NonceServer::builder(secret)
+    let server = NonceServer::builder()
         .build_and_init()
         .await?;
 
@@ -35,9 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(secret);
     let credential = client.credential_builder().sign(payload)?;
 
-    // 服务端验证凭证
+    // 服务端使用密钥验证凭证
     let result = server
         .credential_verifier(&credential)
+        .with_secret(secret)
         .verify(payload)
         .await;
     
@@ -47,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 重放攻击会被自动拒绝
     let replay_result = server
         .credential_verifier(&credential)
+        .with_secret(secret)
         .verify(payload)
         .await;
     

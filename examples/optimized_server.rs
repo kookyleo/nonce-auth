@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Create server with production configuration
     let config = NonceConfig::production();
-    let server = NonceServer::builder(b"production_secret_key_12345")
+    let server = NonceServer::builder()
         .with_storage(memory_storage.clone())
         .with_ttl(config.default_ttl)
         .with_time_window(config.time_window)
@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Verify the credential with context
         match server
             .credential_verifier(&credential)
+            .with_secret(b"production_secret_key_12345")
             .with_context(Some("api_v1"))
             .verify_with(|mac| {
                 mac.update(credential.timestamp.to_string().as_bytes());
@@ -120,6 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for context in contexts {
         match server
             .credential_verifier(&credential)
+            .with_secret(b"production_secret_key_12345")
             .with_context(Some(context))
             .verify(payload)
             .await
@@ -132,6 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Try to reuse in the same context (should fail)
     match server
         .credential_verifier(&credential)
+        .with_secret(b"production_secret_key_12345")
         .with_context(Some("api_v1"))
         .verify(payload)
         .await

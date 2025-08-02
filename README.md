@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let payload = b"important_api_request_data";
 
     // Create server (defaults to in-memory storage)
-    let server = NonceServer::builder(secret)
+    let server = NonceServer::builder()
         .build_and_init()
         .await?;
 
@@ -35,9 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = NonceClient::new(secret);
     let credential = client.credential_builder().sign(payload)?;
 
-    // Server verifies the credential
+    // Server verifies the credential with the secret
     let result = server
         .credential_verifier(&credential)
+        .with_secret(secret)
         .verify(payload)
         .await;
     
@@ -47,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Replay attack is automatically rejected
     let replay_result = server
         .credential_verifier(&credential)
+        .with_secret(secret)
         .verify(payload)
         .await;
     

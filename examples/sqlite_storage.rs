@@ -323,7 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create client and server
     let secret = b"shared_secret_key";
     let client = NonceClient::new(secret);
-    let server = NonceServer::builder(secret)
+    let server = NonceServer::builder()
         .with_storage(storage.clone())
         .build_and_init()
         .await?;
@@ -337,6 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Server verifies the credential using the standard method
     match server
         .credential_verifier(&credential)
+        .with_secret(secret)
         .verify(payload)
         .await
     {

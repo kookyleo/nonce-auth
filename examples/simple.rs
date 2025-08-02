@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let psk = b"my-secret-key";
 
     // Initialize server. By default, it uses `MemoryStorage`.
-    let server = NonceServer::builder(psk)
+    let server = NonceServer::builder()
         .with_ttl(Duration::from_secs(300))
         .with_time_window(Duration::from_secs(60))
         .build_and_init()
@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // To use a different storage backend, like SQLite:
     // let storage = Arc::new(SqliteStorage::new("my_app.db")?);
-    // let server = NonceServer::builder(psk)
+    // let server = NonceServer::builder()
     //     .with_storage(storage)
     //     .build_and_init()
     //     .await?;
@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Server verifies the credential using the standard method
     match server
         .credential_verifier(&credential)
+        .with_secret(psk)
         .verify(payload)
         .await
     {
@@ -41,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Try to use the same credential again (should fail)
     match server
         .credential_verifier(&credential)
+        .with_secret(psk)
         .verify(payload)
         .await
     {

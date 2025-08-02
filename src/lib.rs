@@ -47,7 +47,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_server_separation() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret")
+        let server = NonceServer::builder()
             .build_and_init()
             .await
             .unwrap();
@@ -59,6 +59,7 @@ mod tests {
         // Server verifies the credential using the standard method
         let result = server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .verify(payload)
             .await;
 
@@ -67,6 +68,7 @@ mod tests {
         // Same nonce should be rejected
         let result = server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .verify(payload)
             .await;
 
@@ -76,7 +78,7 @@ mod tests {
     #[tokio::test]
     async fn test_context_isolation() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret")
+        let server = NonceServer::builder()
             .build_and_init()
             .await
             .unwrap();
@@ -87,6 +89,7 @@ mod tests {
         // Same nonce should work in different contexts
         server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .with_context(Some("context1"))
             .verify(payload)
             .await
@@ -94,6 +97,7 @@ mod tests {
 
         server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .with_context(Some("context2"))
             .verify(payload)
             .await
@@ -102,6 +106,7 @@ mod tests {
         // But should fail if used twice in same context
         let result = server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .with_context(Some("context1"))
             .verify(payload)
             .await;
@@ -112,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn test_timestamp_validation() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"test_secret")
+        let server = NonceServer::builder()
             .with_time_window(std::time::Duration::from_secs(1))
             .build_and_init()
             .await
@@ -131,6 +136,7 @@ mod tests {
 
         let result = server
             .credential_verifier(&credential)
+            .with_secret(b"test_secret")
             .verify(payload)
             .await;
 
@@ -140,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn test_signature_verification() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder(b"different_secret")
+        let server = NonceServer::builder()
             .build_and_init()
             .await
             .unwrap();
@@ -150,6 +156,7 @@ mod tests {
 
         let result = server
             .credential_verifier(&credential)
+            .with_secret(b"different_secret")  // Different secret from client
             .verify(payload)
             .await;
 

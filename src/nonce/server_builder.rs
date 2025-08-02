@@ -10,20 +10,18 @@ use crate::storage::{MemoryStorage, NonceStorage};
 /// configuration of all server parameters.
 #[must_use = "The builder does nothing unless `.build_and_init()` is called."]
 pub struct NonceServerBuilder<S: NonceStorage> {
-    secret: Vec<u8>,
     storage: Arc<S>,
     ttl: Option<Duration>,
     time_window: Option<Duration>,
 }
 
 impl NonceServerBuilder<MemoryStorage> {
-    /// Creates a new builder with the required secret key.
+    /// Creates a new builder.
     ///
     /// By default, this builder uses `MemoryStorage`. Use `.with_storage()` to
     /// provide a different storage backend.
-    pub(crate) fn new(secret: &[u8]) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            secret: secret.to_vec(),
             storage: Arc::new(MemoryStorage::new()),
             ttl: None,
             time_window: None,
@@ -35,7 +33,6 @@ impl<S: NonceStorage> NonceServerBuilder<S> {
     /// Specifies a custom storage backend to use instead of the default `MemoryStorage`.
     pub fn with_storage<T: NonceStorage>(self, storage: Arc<T>) -> NonceServerBuilder<T> {
         NonceServerBuilder {
-            secret: self.secret,
             storage,
             ttl: self.ttl,
             time_window: self.time_window,
@@ -63,7 +60,7 @@ impl<S: NonceStorage> NonceServerBuilder<S> {
     /// This method consumes the builder and returns a fully configured and initialized server.
     /// It automatically calls the storage backend's `init()` method.
     pub async fn build_and_init(self) -> Result<NonceServer<S>, NonceError> {
-        let server = NonceServer::new(&self.secret, self.storage, self.ttl, self.time_window);
+        let server = NonceServer::new(self.storage, self.ttl, self.time_window);
         server.init().await?;
         Ok(server)
     }

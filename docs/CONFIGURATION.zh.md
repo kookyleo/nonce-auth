@@ -11,7 +11,7 @@ use nonce_auth::NonceServer;
 use std::time::Duration;
 
 // 示例：自定义10分钟的 TTL 和 2分钟的时间窗口。
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_ttl(Duration::from_secs(600))         // 自定义 TTL
     .with_time_window(Duration::from_secs(120)) // 自定义时间窗口
     .build_and_init()
@@ -43,7 +43,7 @@ let config = NonceConfig::development();
 let config = NonceConfig::high_security();
 
 // 将配置应用到服务器
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_ttl(config.default_ttl)
     .with_time_window(config.time_window)
     .build_and_init()
@@ -75,8 +75,14 @@ export NONCE_AUTH_DEFAULT_TIME_WINDOW=120
 use nonce_auth::NonceServer;
 
 // 默认使用 MemoryStorage
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .build_and_init()
+    .await?;
+
+// 使用特定密钥验证凭证
+server.credential_verifier(&credential)
+    .with_secret(user_secret)
+    .verify(payload)
     .await?;
 ```
 
@@ -106,9 +112,56 @@ impl NonceStorage for MyCustomStorage {
 }
 
 // 使用构建器模式使用自定义存储
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_storage(Arc::new(MyCustomStorage))
     .build_and_init()
     .await?;
 ```
+
+## 多密钥支持
+
+新 API 设计的主要优势之一是单个服务器实例可以处理多个不同密钥的验证。这在以下场景中非常有用：
+
+- 不同用户拥有不同的认证密钥
+- 不同 API 版本使用不同的密钥
+- 不同租户需要隔离的认证
+
+### 示例：多用户
+
+```rust
+use nonce_auth::NonceServer;
+
+// 创建一个服务器实例
+let server = NonceServer::builder()
+    .build_and_init()
+    .await?;
+
+// 用户1认证
+server.credential_verifier(&user1_credential)
+    .with_secret(user1_secret)
+    .verify(payload)
+    .await?;
+
+// 用户2认证
+server.credential_verifier(&user2_credential)
+    .with_secret(user2_secret)
+    .verify(payload)
+    .await?;
+```
+
+### 示例：上下文隔离与不同密钥
+
+```rust
+// 相同的 nonce 可以在不同上下文中使用不同密钥
+server.credential_verifier(&credential)
+    .with_secret(api_v1_secret)
+    .with_context(Some("api_v1"))
+    .verify(payload)
+    .await?;
+
+server.credential_verifier(&credential)
+    .with_secret(api_v2_secret)
+    .with_context(Some("api_v2"))
+    .verify(payload)
+    .await?;
 ```

@@ -13,7 +13,6 @@ use crate::{HmacSha256, NonceCredential};
 pub struct NonceServer<S: NonceStorage> {
     pub(crate) default_ttl: Duration,
     pub(crate) time_window: Duration,
-    pub(crate) secret: Vec<u8>,
     pub(crate) storage: Arc<S>,
 }
 
@@ -22,15 +21,14 @@ impl NonceServer<MemoryStorage> {
     ///
     /// The builder defaults to using `MemoryStorage`. Provide a custom storage
     /// backend using the `.with_storage()` method on the builder.
-    pub fn builder(secret: &[u8]) -> NonceServerBuilder<MemoryStorage> {
-        NonceServerBuilder::new(secret)
+    pub fn builder() -> NonceServerBuilder<MemoryStorage> {
+        NonceServerBuilder::new()
     }
 }
 
 impl<S: NonceStorage> NonceServer<S> {
     /// Internal constructor used by the builder.
     pub(crate) fn new(
-        secret: &[u8],
         storage: Arc<S>,
         default_ttl: Option<Duration>,
         time_window: Option<Duration>,
@@ -40,7 +38,6 @@ impl<S: NonceStorage> NonceServer<S> {
         Self {
             default_ttl,
             time_window,
-            secret: secret.to_vec(),
             storage,
         }
     }
@@ -73,14 +70,14 @@ impl<S: NonceStorage> NonceServer<S> {
 
     /// Verifies the HMAC signature using the provided data builder.
     pub(crate) fn verify_signature<F>(
-        &self,
+        secret: &[u8],
         signature: &str,
         data_builder: F,
     ) -> Result<(), NonceError>
     where
         F: FnOnce(&mut hmac::Hmac<sha2::Sha256>),
     {
-        let mut mac = HmacSha256::new_from_slice(&self.secret)
+        let mut mac = HmacSha256::new_from_slice(secret)
             .map_err(|e| NonceError::CryptoError(e.to_string()))?;
         data_builder(&mut mac);
         let expected_signature = hex::encode(mac.finalize().into_bytes());

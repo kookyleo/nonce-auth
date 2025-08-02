@@ -11,7 +11,7 @@ use nonce_auth::NonceServer;
 use std::time::Duration;
 
 // Example: Custom TTL of 10 minutes and a time window of 2 minutes.
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_ttl(Duration::from_secs(600))         // Custom TTL
     .with_time_window(Duration::from_secs(120)) // Custom time window
     .build_and_init()
@@ -43,7 +43,7 @@ let config = NonceConfig::development();
 let config = NonceConfig::high_security();
 
 // Apply configuration to server
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_ttl(config.default_ttl)
     .with_time_window(config.time_window)
     .build_and_init()
@@ -75,8 +75,14 @@ The default storage backend is `MemoryStorage`, which is automatically used when
 use nonce_auth::NonceServer;
 
 // Uses MemoryStorage by default
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .build_and_init()
+    .await?;
+
+// Verify credentials with specific secrets
+server.credential_verifier(&credential)
+    .with_secret(user_secret)
+    .verify(payload)
     .await?;
 ```
 
@@ -105,8 +111,56 @@ impl NonceStorage for MyCustomStorage {
 }
 
 // Use the custom storage with the builder
-let server = NonceServer::builder(b"your-secret-key")
+let server = NonceServer::builder()
     .with_storage(Arc::new(MyCustomStorage))
     .build_and_init()
+    .await?;
+```
+
+## Multi-Secret Support
+
+One of the key advantages of the new API design is that a single server instance can handle verification for multiple different secrets. This is useful for scenarios where:
+
+- Different users have different authentication keys
+- Different API versions use different secrets
+- Different tenants require isolated authentication
+
+### Example: Multiple Users
+
+```rust
+use nonce_auth::NonceServer;
+
+// Create one server instance
+let server = NonceServer::builder()
+    .build_and_init()
+    .await?;
+
+// User 1 authentication
+server.credential_verifier(&user1_credential)
+    .with_secret(user1_secret)
+    .verify(payload)
+    .await?;
+
+// User 2 authentication
+server.credential_verifier(&user2_credential)
+    .with_secret(user2_secret)
+    .verify(payload)
+    .await?;
+```
+
+### Example: Context Isolation with Different Secrets
+
+```rust
+// Same nonce can be used across different contexts with different secrets
+server.credential_verifier(&credential)
+    .with_secret(api_v1_secret)
+    .with_context(Some("api_v1"))
+    .verify(payload)
+    .await?;
+
+server.credential_verifier(&credential)
+    .with_secret(api_v2_secret)
+    .with_context(Some("api_v2"))
+    .verify(payload)
     .await?;
 ```

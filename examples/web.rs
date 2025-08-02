@@ -389,7 +389,7 @@ async fn handle_protected_request(
             Some(server) => server.clone(),
             None => {
                 // Create a new server for this session
-                let new_server = NonceServer::builder(psk.as_bytes())
+                let new_server = NonceServer::builder()
                     .with_ttl(Duration::from_secs(60)) // 1 minute TTL
                     .with_time_window(Duration::from_secs(15)) // 15 seconds time window
                     .build_and_init()
@@ -405,6 +405,7 @@ async fn handle_protected_request(
     // Verify the request using the custom logic verifier
     match server
         .credential_verifier(&req.auth)
+        .with_secret(psk.as_bytes())
         .verify_with(|mac| {
             mac.update(req.auth.timestamp.to_string().as_bytes());
             mac.update(req.auth.nonce.as_bytes());

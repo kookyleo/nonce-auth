@@ -18,7 +18,7 @@ use thiserror::Error;
 /// use hmac::Mac;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let server = NonceServer::builder(b"secret").build_and_init().await?;
+/// let server = NonceServer::builder().build_and_init().await?;
 /// let client = NonceClient::new(b"secret");
 /// let payload = b"test payload";
 /// let credential = client.credential_builder().sign(payload)?;
@@ -26,6 +26,7 @@ use thiserror::Error;
 /// // Handle different error types
 /// match server
 ///     .credential_verifier(&credential)
+///     .with_secret(b"secret")
 ///     .verify_with(|mac| {
 ///         mac.update(credential.timestamp.to_string().as_bytes());
 ///         mac.update(credential.nonce.as_bytes());
