@@ -200,6 +200,122 @@ let server = NonceServer::builder()
 
 See [SQLite example](../examples/sqlite_storage.rs) for a complete implementation.
 
+#### Storage Backend Lifecycle
+
+```rust
+// Understanding the init() method
+#[async_trait]
+impl NonceStorage for MyCustomStorage {
+    async fn init(&self) -> Result<(), NonceError> {
+        // Called automatically by build_and_init()
+        // Use this to:
+        // - Create database tables
+        // - Establish connections
+        // - Run migrations
+        // - Validate configuration
+        Ok(())
+    }
+    
+    // ... other methods
+}
+
+// Manual initialization (if needed)
+let storage = Arc::new(MyCustomStorage::new());
+storage.init().await?; // Usually not needed - build_and_init() calls this
+
+let server = NonceServer::builder()
+    .with_storage(storage)
+    .build_and_init() // This calls storage.init() automatically
+    .await?;
+```
+
+#### Advanced Storage Examples
+
+**Redis-like Storage Implementation:**
+```rust
+use async_trait::async_trait;
+use nonce_auth::storage::{NonceStorage, NonceEntry, StorageStats};
+
+pub struct RedisStorage {
+    client: redis::Client,
+    key_prefix: String,
+}
+
+#[async_trait]
+impl NonceStorage for RedisStorage {
+    async fn init(&self) -> Result<(), NonceError> {
+        // Test connection and setup
+        let mut conn = self.client.get_async_connection().await
+            .map_err(|e| NonceError::DatabaseError(format!("Redis connection failed: {e}")))?;
+        
+        // Verify Redis is accessible
+        redis::cmd("PING").query_async(&mut conn).await
+            .map_err(|e| NonceError::DatabaseError(format!("Redis ping failed: {e}")))?;
+        
+        Ok(())
+    }
+
+    async fn set(&self, nonce: &str, context: Option<&str>, ttl: Duration) -> Result<(), NonceError> {
+        let mut conn = self.client.get_async_connection().await
+            .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+        
+        let key = format!("{}:{}:{}", self.key_prefix, nonce, context.unwrap_or(""));
+        let ttl_secs = ttl.as_secs() as usize;
+        
+        redis::cmd("SETEX")
+            .arg(&key)
+            .arg(ttl_secs)
+            .arg("1")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+        
+        Ok(())
+    }
+
+    async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> {
+        let mut conn = self.client.get_async_connection().await
+            .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+        
+        let key = format!("{}:{}:{}", self.key_prefix, nonce, context.unwrap_or(""));
+        
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| NonceError::DatabaseError(e.to_string()))?;
+        
+        Ok(exists)
+    }
+
+    // ... implement other required methods
+}
+```
+
+**Encrypted Storage Wrapper:**
+```rust
+pub struct EncryptedStorage<T: NonceStorage> {
+    inner: T,
+    encryption_key: [u8; 32],
+}
+
+#[async_trait]
+impl<T: NonceStorage + Send + Sync> NonceStorage for EncryptedStorage<T> {
+    async fn init(&self) -> Result<(), NonceError> {
+        self.inner.init().await
+    }
+
+    async fn set(&self, nonce: &str, context: Option<&str>, ttl: Duration) -> Result<(), NonceError> {
+        let encrypted_nonce = self.encrypt(nonce)?;
+        let encrypted_context = context.map(|c| self.encrypt(c)).transpose()?;
+        
+        self.inner.set(&encrypted_nonce, encrypted_context.as_deref(), ttl).await
+    }
+
+    // ... implement encryption/decryption for other methods
+}
+```
+
 ## Client Configuration
 
 ### Basic Client Usage
@@ -246,6 +362,44 @@ let client = NonceClient::builder()
 | `with_nonce_generator(F)` | `F: Fn() -> String` | Custom nonce generation function |
 | `with_time_provider(F)` | `F: Fn() -> Result<u64, NonceError>` | Custom timestamp provider |
 | `build()` | - | Build client (panics if no secret) |
+
+#### Builder Pattern Advanced Usage
+
+```rust
+// Using Default trait
+let client = NonceClientBuilder::default()
+    .with_secret(b"my_secret")
+    .build();
+
+// Conditional builder configuration
+fn create_client_for_environment(env: &str) -> NonceClient {
+    let mut builder = NonceClient::builder()
+        .with_secret(get_secret_for_env(env));
+    
+    if env == "development" {
+        builder = builder.with_nonce_generator(|| {
+            format!("dev-{}-{}", std::process::id(), uuid::Uuid::new_v4())
+        });
+    } else if env == "testing" {
+        builder = builder
+            .with_nonce_generator(|| "test-nonce".to_string())
+            .with_time_provider(|| Ok(1234567890));
+    }
+    
+    builder.build()
+}
+
+// Builder with error handling
+fn try_build_client(secret: Option<&[u8]>) -> Result<NonceClient, &'static str> {
+    let Some(secret) = secret else {
+        return Err("Secret is required");
+    };
+    
+    Ok(NonceClient::builder()
+        .with_secret(secret)
+        .build())
+}
+```
 
 ### Client Configuration Examples
 
@@ -316,6 +470,30 @@ let credential = client.credential_builder()
         mac.update(b"payload");
         mac.update(b"extra_context_data");  // Additional authenticated data
     })?;
+
+// Complex signing with structured data
+let credential = client.credential_builder()
+    .sign_with(|mac, timestamp, nonce| {
+        mac.update(b"prefix:");
+        mac.update(timestamp.as_bytes());
+        mac.update(b":nonce:");
+        mac.update(nonce.as_bytes());
+        mac.update(b":user_id:");
+        mac.update(b"12345");
+        mac.update(b":payload:");
+        mac.update(payload);
+        mac.update(b":suffix");
+    })?;
+
+// Binary data signing
+let binary_data = vec![0x01, 0x02, 0x03, 0x04];
+let credential = client.credential_builder()
+    .sign_with(|mac, timestamp, nonce| {
+        mac.update(timestamp.as_bytes());
+        mac.update(nonce.as_bytes());
+        mac.update(&binary_data);  // Binary payload
+        mac.update(b"metadata");   // Additional metadata
+    })?;
 ```
 
 ## Credential Verification
@@ -357,6 +535,54 @@ let result = server
         mac.update(credential.nonce.as_bytes());
         mac.update(payload);
         mac.update(b"extra_context_data");  // Must match client-side logic
+    })
+    .await;
+
+// Complex verification matching structured signing
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(b"prefix:");
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(b":nonce:");
+        mac.update(credential.nonce.as_bytes());
+        mac.update(b":user_id:");
+        mac.update(b"12345");  // Must match exact user_id from signing
+        mac.update(b":payload:");
+        mac.update(payload);
+        mac.update(b":suffix");
+    })
+    .await;
+
+// Binary data verification
+let binary_data = vec![0x01, 0x02, 0x03, 0x04];
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(credential.nonce.as_bytes());
+        mac.update(&binary_data);  // Same binary data as signing
+        mac.update(b"metadata");   // Same metadata as signing
+    })
+    .await;
+
+// Conditional verification based on credential data
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(credential.nonce.as_bytes());
+        mac.update(payload);
+        
+        // Add conditional data based on timestamp
+        if credential.timestamp > 1640995200 {  // After 2022-01-01
+            mac.update(b"new_format");
+        } else {
+            mac.update(b"legacy_format");
+        }
     })
     .await;
 ```
@@ -465,6 +691,100 @@ match server.credential_verifier(&credential)
         // Cryptographic operation error
         println!("⚠ Crypto error: {}", msg);
     },
+}
+```
+
+### Advanced Error Handling Patterns
+
+```rust
+use nonce_auth::NonceError;
+use std::time::Duration;
+
+// Retry logic for transient database errors
+async fn verify_with_retry(
+    server: &NonceServer<impl NonceStorage>,
+    credential: &NonceCredential,
+    secret: &[u8],
+    payload: &[u8],
+    max_retries: u32,
+) -> Result<(), NonceError> {
+    let mut attempts = 0;
+    
+    loop {
+        match server
+            .credential_verifier(credential)
+            .with_secret(secret)
+            .verify(payload)
+            .await
+        {
+            Ok(()) => return Ok(()),
+            
+            Err(NonceError::DatabaseError(_)) if attempts < max_retries => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
+                continue;
+            },
+            
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+// Graceful error handling for production
+async fn handle_verification_error(error: NonceError) -> (u16, String) {
+    match error {
+        NonceError::DuplicateNonce => {
+            (409, "Request already processed".to_string())
+        },
+        
+        NonceError::ExpiredNonce => {
+            (401, "Request expired, please generate a new one".to_string())
+        },
+        
+        NonceError::InvalidSignature => {
+            (401, "Invalid authentication credentials".to_string())
+        },
+        
+        NonceError::TimestampOutOfWindow => {
+            (400, "Request timestamp out of acceptable range".to_string())
+        },
+        
+        NonceError::DatabaseError(_) => {
+            // Log the actual error internally but don't expose details
+            eprintln!("Database error: {}", error);
+            (503, "Service temporarily unavailable".to_string())
+        },
+        
+        NonceError::CryptoError(_) => {
+            // Log the actual error internally
+            eprintln!("Crypto error: {}", error);
+            (500, "Internal server error".to_string())
+        },
+    }
+}
+
+// Custom error handling for verify_with
+async fn verify_with_detailed_error(
+    server: &NonceServer<impl NonceStorage>,
+    credential: &NonceCredential,
+    secret: &[u8],
+    payload: &[u8],
+) -> Result<(), String> {
+    server
+        .credential_verifier(credential)
+        .with_secret(secret)
+        .verify_with(|mac| {
+            mac.update(credential.timestamp.to_string().as_bytes());
+            mac.update(credential.nonce.as_bytes());
+            mac.update(payload);
+        })
+        .await
+        .map_err(|e| match e {
+            NonceError::InvalidSignature => {
+                "Signature mismatch: Check MAC construction order and data".to_string()
+            },
+            other => format!("Verification failed: {}", other),
+        })
 }
 ```
 

@@ -316,6 +316,30 @@ let credential = client.credential_builder()
         mac.update(b"payload");
         mac.update(b"extra_context_data");  // 额外的认证数据
     })?;
+
+// 复杂的结构化数据签名
+let credential = client.credential_builder()
+    .sign_with(|mac, timestamp, nonce| {
+        mac.update(b"prefix:");
+        mac.update(timestamp.as_bytes());
+        mac.update(b":nonce:");
+        mac.update(nonce.as_bytes());
+        mac.update(b":user_id:");
+        mac.update(b"12345");
+        mac.update(b":payload:");
+        mac.update(payload);
+        mac.update(b":suffix");
+    })?;
+
+// 二进制数据签名
+let binary_data = vec![0x01, 0x02, 0x03, 0x04];
+let credential = client.credential_builder()
+    .sign_with(|mac, timestamp, nonce| {
+        mac.update(timestamp.as_bytes());
+        mac.update(nonce.as_bytes());
+        mac.update(&binary_data);  // 二进制载荷
+        mac.update(b"metadata");   // 额外元数据
+    })?;
 ```
 
 ## 凭证验证
@@ -357,6 +381,54 @@ let result = server
         mac.update(credential.nonce.as_bytes());
         mac.update(payload);
         mac.update(b"extra_context_data");  // 必须匹配客户端逻辑
+    })
+    .await;
+
+// 复杂验证匹配结构化签名
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(b"prefix:");
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(b":nonce:");
+        mac.update(credential.nonce.as_bytes());
+        mac.update(b":user_id:");
+        mac.update(b"12345");  // 必须匹配签名时的确切 user_id
+        mac.update(b":payload:");
+        mac.update(payload);
+        mac.update(b":suffix");
+    })
+    .await;
+
+// 二进制数据验证
+let binary_data = vec![0x01, 0x02, 0x03, 0x04];
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(credential.nonce.as_bytes());
+        mac.update(&binary_data);  // 与签名时相同的二进制数据
+        mac.update(b"metadata");   // 与签名时相同的元数据
+    })
+    .await;
+
+// 基于凭证数据的条件验证
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .verify_with(|mac| {
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(credential.nonce.as_bytes());
+        mac.update(payload);
+        
+        // 根据时间戳添加条件数据
+        if credential.timestamp > 1640995200 {  // 2022-01-01 之后
+            mac.update(b"new_format");
+        } else {
+            mac.update(b"legacy_format");
+        }
     })
     .await;
 ```
@@ -465,6 +537,100 @@ match server.credential_verifier(&credential)
         // 加密操作错误
         println!("⚠ 加密错误: {}", msg);
     },
+}
+```
+
+### 高级错误处理模式
+
+```rust
+use nonce_auth::NonceError;
+use std::time::Duration;
+
+// 数据库错误的重试逻辑
+async fn verify_with_retry(
+    server: &NonceServer<impl NonceStorage>,
+    credential: &NonceCredential,
+    secret: &[u8],
+    payload: &[u8],
+    max_retries: u32,
+) -> Result<(), NonceError> {
+    let mut attempts = 0;
+    
+    loop {
+        match server
+            .credential_verifier(credential)
+            .with_secret(secret)
+            .verify(payload)
+            .await
+        {
+            Ok(()) => return Ok(()),
+            
+            Err(NonceError::DatabaseError(_)) if attempts < max_retries => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(100 * attempts as u64)).await;
+                continue;
+            },
+            
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+// 生产环境的优雅错误处理
+async fn handle_verification_error(error: NonceError) -> (u16, String) {
+    match error {
+        NonceError::DuplicateNonce => {
+            (409, "请求已处理".to_string())
+        },
+        
+        NonceError::ExpiredNonce => {
+            (401, "请求已过期，请生成新的请求".to_string())
+        },
+        
+        NonceError::InvalidSignature => {
+            (401, "无效的认证凭据".to_string())
+        },
+        
+        NonceError::TimestampOutOfWindow => {
+            (400, "请求时间戳超出可接受范围".to_string())
+        },
+        
+        NonceError::DatabaseError(_) => {
+            // 内部记录实际错误但不暴露细节
+            eprintln!("数据库错误: {}", error);
+            (503, "服务暂时不可用".to_string())
+        },
+        
+        NonceError::CryptoError(_) => {
+            // 内部记录实际错误
+            eprintln!("加密错误: {}", error);
+            (500, "内部服务器错误".to_string())
+        },
+    }
+}
+
+// verify_with 的自定义错误处理
+async fn verify_with_detailed_error(
+    server: &NonceServer<impl NonceStorage>,
+    credential: &NonceCredential,
+    secret: &[u8],
+    payload: &[u8],
+) -> Result<(), String> {
+    server
+        .credential_verifier(credential)
+        .with_secret(secret)
+        .verify_with(|mac| {
+            mac.update(credential.timestamp.to_string().as_bytes());
+            mac.update(credential.nonce.as_bytes());
+            mac.update(payload);
+        })
+        .await
+        .map_err(|e| match e {
+            NonceError::InvalidSignature => {
+                "签名不匹配：检查 MAC 构建顺序和数据".to_string()
+            },
+            other => format!("验证失败: {}", other),
+        })
 }
 ```
 
