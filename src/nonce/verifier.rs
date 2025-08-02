@@ -82,7 +82,7 @@ impl<'a, S: NonceStorage> CredentialVerifier<'a, S> {
         let secret = self.secret.ok_or_else(|| {
             NonceError::CryptoError("Secret key must be provided using with_secret()".to_string())
         })?;
-        
+
         self.server.verify_timestamp(self.credential.timestamp)?;
         NonceServer::<S>::verify_signature(secret, &self.credential.signature, signature_builder)?;
         self.server

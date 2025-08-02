@@ -43,7 +43,7 @@ pub struct NonceClient {
 
 impl NonceClient {
     /// Creates a new `NonceClient` with the specified shared secret and default generators.
-    /// 
+    ///
     /// Uses UUID v4 for nonce generation and system time for timestamps.
     /// For more customization options, use `NonceClient::builder()`.
     pub fn new(secret: &[u8]) -> Self {
@@ -220,11 +220,13 @@ impl NonceClientBuilder {
     ///
     /// Panics if no secret was provided via `with_secret()`.
     pub fn build(self) -> NonceClient {
-        let secret = self.secret.expect("Secret is required. Use with_secret() to provide one.");
-        
-        let nonce_generator = self.nonce_generator.unwrap_or_else(|| {
-            Box::new(|| uuid::Uuid::new_v4().to_string())
-        });
+        let secret = self
+            .secret
+            .expect("Secret is required. Use with_secret() to provide one.");
+
+        let nonce_generator = self
+            .nonce_generator
+            .unwrap_or_else(|| Box::new(|| uuid::Uuid::new_v4().to_string()));
 
         let time_provider = self.time_provider.unwrap_or_else(|| {
             Box::new(|| {
@@ -325,10 +327,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_secret() {
-        let client = NonceClient::builder()
-            .with_secret(TEST_SECRET)
-            .build();
-        
+        let client = NonceClient::builder().with_secret(TEST_SECRET).build();
+
         assert_eq!(client.secret, TEST_SECRET);
     }
 
@@ -336,7 +336,7 @@ mod tests {
     fn test_builder_with_custom_nonce_generator() {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let counter_clone = counter.clone();
-        
+
         let client = NonceClient::builder()
             .with_secret(TEST_SECRET)
             .with_nonce_generator(move || {
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_builder_with_custom_time_provider() {
         let fixed_time = 1234567890u64;
-        
+
         let client = NonceClient::builder()
             .with_secret(TEST_SECRET)
             .with_time_provider(move || Ok(fixed_time))
@@ -374,10 +374,10 @@ mod tests {
             .build();
 
         let credential = client.credential_builder().sign(b"test payload").unwrap();
-        
+
         assert_eq!(credential.nonce, "fixed-nonce");
         assert_eq!(credential.timestamp, 9999999999);
-        
+
         // Verify signature is computed correctly with fixed values
         let expected_signature = client
             .generate_signature(|mac| {
@@ -399,12 +399,12 @@ mod tests {
     fn test_builder_default() {
         let builder1 = NonceClientBuilder::new();
         let builder2 = NonceClientBuilder::default();
-        
+
         // Both should have the same initial state (all None)
         assert!(builder1.secret.is_none());
         assert!(builder1.nonce_generator.is_none());
         assert!(builder1.time_provider.is_none());
-        
+
         assert!(builder2.secret.is_none());
         assert!(builder2.nonce_generator.is_none());
         assert!(builder2.time_provider.is_none());

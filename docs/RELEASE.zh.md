@@ -209,25 +209,4 @@ git push origin v0.2.0
 
 ## 发布历史
 
-### v0.1.9
-- 升级到专业的 Release Changelog Builder
-- 修复了 GitHub Actions 中的版本号格式问题
-- 优化了 Release Notes 的格式和内容
-- 添加了智能的 changelog 分类系统
-
-### v0.1.8
-- 修复了 GitHub Actions 输出格式问题
-- 解决了 docs.rs 构建兼容性问题
-- 添加了条件编译支持
-
-### v0.1.2
-- 修复了代码格式和 Clippy 警告
-- 完善了文档和示例
-
-### v0.1.1
-- 初始功能实现
-- 客户端服务端分离设计
-- 灵活的签名算法支持
-
-### v0.1.0
-- 项目初始发布
+发布历史可在 [GitHub Releases](https://github.com/kookyleo/nonce-auth/releases) 页面查看。

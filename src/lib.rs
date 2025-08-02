@@ -47,10 +47,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_server_separation() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder()
-            .build_and_init()
-            .await
-            .unwrap();
+        let server = NonceServer::builder().build_and_init().await.unwrap();
         let payload = b"test_payload";
 
         // Client creates a credential
@@ -78,10 +75,7 @@ mod tests {
     #[tokio::test]
     async fn test_context_isolation() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder()
-            .build_and_init()
-            .await
-            .unwrap();
+        let server = NonceServer::builder().build_and_init().await.unwrap();
         let payload = b"test_payload";
 
         let credential = client.credential_builder().sign(payload).unwrap();
@@ -146,17 +140,14 @@ mod tests {
     #[tokio::test]
     async fn test_signature_verification() {
         let client = NonceClient::new(b"test_secret");
-        let server = NonceServer::builder()
-            .build_and_init()
-            .await
-            .unwrap();
+        let server = NonceServer::builder().build_and_init().await.unwrap();
         let payload = b"test_payload";
 
         let credential = client.credential_builder().sign(payload).unwrap();
 
         let result = server
             .credential_verifier(&credential)
-            .with_secret(b"different_secret")  // Different secret from client
+            .with_secret(b"different_secret") // Different secret from client
             .verify(payload)
             .await;
 

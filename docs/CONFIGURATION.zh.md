@@ -1,48 +1,59 @@
 # 配置指南
 
-本文档为 `nonce-auth` 库中所有可用的配置选项提供了参考。
+本文档为 `nonce-auth` 库中所有可用的配置选项提供了全面的参考。
 
 ## 服务端配置
 
-`NonceServer` 的配置通过构建器模式完成，允许自定义 TTL 和时间窗口。
+### 服务端构建器模式
+
+`NonceServer` 通过构建器模式进行配置，支持以下方法：
 
 ```rust
-use nonce_auth::NonceServer;
+use nonce_auth::{NonceServer, NonceConfig};
 use std::time::Duration;
+use std::sync::Arc;
 
-// 示例：自定义10分钟的 TTL 和 2分钟的时间窗口。
+// 完整的服务端配置示例
 let server = NonceServer::builder()
-    .with_ttl(Duration::from_secs(600))         // 自定义 TTL
-    .with_time_window(Duration::from_secs(120)) // 自定义时间窗口
-    .build_and_init()
+    .with_ttl(Duration::from_secs(600))         // 自定义 TTL (默认: 300秒)
+    .with_time_window(Duration::from_secs(120)) // 自定义时间窗口 (默认: 60秒)
+    .with_storage(Arc::new(custom_storage))     // 自定义存储后端
+    .build_and_init()                           // 初始化存储并返回服务器
     .await?;
 ```
 
-- **`default_ttl`**: `Option<Duration>`
-  - **默认值**: `Some(Duration::from_secs(300))` (5 分钟)
-  - **描述**: Nonce 在存储后端中的默认生存时间。超过此时长的 Nonce 将被视为过期。
+#### 可用的构建器方法
 
-- **`time_window`**: `Option<Duration>`
-  - **默认值**: `Some(Duration::from_secs(60))` (1 分钟)
-  - **描述**: 服务器时钟与传入凭证上的时间戳之间允许的最大时间差。
+| 方法 | 描述 | 默认值 |
+|-----|------|-------|
+| `with_ttl(Duration)` | 设置 nonce 生存时间 | 5 分钟 |
+| `with_time_window(Duration)` | 设置时间戳验证窗口 | 1 分钟 |
+| `with_storage(Arc<T>)` | 设置自定义存储后端 | `MemoryStorage` |
+| `build_and_init()` | 构建并初始化服务器 | - |
 
 ### 配置预设
 
-库提供了针对常见使用场景的内置配置预设：
+针对常见场景的内置配置预设：
 
 ```rust
 use nonce_auth::NonceConfig;
 
-// 生产环境：5分钟 TTL，1分钟窗口 - 平衡安全性和可用性
+// 生产环境：平衡安全性和可用性
 let config = NonceConfig::production();
+assert_eq!(config.default_ttl, Duration::from_secs(300));  // 5 分钟
+assert_eq!(config.time_window, Duration::from_secs(60));   // 1 分钟
 
-// 开发环境：10分钟 TTL，2分钟窗口 - 对开发者友好
+// 开发环境：对开发者友好的设置
 let config = NonceConfig::development();
+assert_eq!(config.default_ttl, Duration::from_secs(600));  // 10 分钟
+assert_eq!(config.time_window, Duration::from_secs(120));  // 2 分钟
 
-// 高安全性：2分钟 TTL，30秒窗口 - 最大安全性
+// 高安全性：最大安全性，较短的时间窗口
 let config = NonceConfig::high_security();
+assert_eq!(config.default_ttl, Duration::from_secs(120));  // 2 分钟
+assert_eq!(config.time_window, Duration::from_secs(30));   // 30 秒
 
-// 将配置应用到服务器
+// 将预设应用到服务器
 let server = NonceServer::builder()
     .with_ttl(config.default_ttl)
     .with_time_window(config.time_window)
@@ -50,47 +61,88 @@ let server = NonceServer::builder()
     .await?;
 ```
 
+### 配置验证和监控
+
+```rust
+use nonce_auth::NonceConfig;
+
+let config = NonceConfig::production();
+
+// 获取人类可读的摘要
+println!("{}", config.summary());
+// 输出: "NonceConfig { TTL: 300s, Time Window: 60s }"
+
+// 验证配置并获取警告
+let issues = config.validate();
+if issues.is_empty() {
+    println!("✓ 配置有效");
+} else {
+    println!("⚠ 配置问题:");
+    for issue in issues {
+        println!("  - {}", issue);
+    }
+}
+```
+
 ### 环境变量
 
-这些参数也可以通过环境变量进行配置。环境变量将作为构建器的默认值使用：
-
-- `NONCE_AUTH_DEFAULT_TTL`: 覆盖默认的 TTL (单位：秒)。
-- `NONCE_AUTH_DEFAULT_TIME_WINDOW`: 覆盖默认的时间窗口 (单位：秒)。
+通过环境变量配置默认值：
 
 ```bash
-# 示例：设置10分钟的 TTL 和 2分钟的时间窗口。
+# 设置默认 TTL (单位：秒)
 export NONCE_AUTH_DEFAULT_TTL=600
+
+# 设置默认时间窗口 (单位：秒)
 export NONCE_AUTH_DEFAULT_TIME_WINDOW=120
+```
+
+```rust
+// 使用环境变量作为默认值
+let config = NonceConfig::from_env();
+let server = NonceServer::builder()
+    .with_ttl(config.default_ttl)
+    .with_time_window(config.time_window)
+    .build_and_init()
+    .await?;
+```
+
+### 服务端检查和管理
+
+创建服务器后，可以使用以下方法进行检查和管理：
+
+```rust
+// 检查服务器配置
+println!("服务器 TTL: {:?}", server.ttl());
+println!("服务器时间窗口: {:?}", server.time_window());
+
+// 访问存储后端获取统计信息
+let stats = server.storage().get_stats().await?;
+println!("总 nonce 记录数: {}", stats.total_records);
+println!("存储后端: {}", stats.backend_info);
+
+// 手动清理过期的 nonces
+let deleted_count = server.cleanup_expired_nonces(Duration::from_secs(300)).await?;
+println!("清理了 {} 个过期的 nonces", deleted_count);
 ```
 
 ## 存储后端配置
 
-本库使用基于 trait 的存储系统。您可以使用内置的 `MemoryStorage` 或创建自己的实现。
+### 内置存储后端
 
-### 内存存储 (默认)
-
-默认存储后端是 `MemoryStorage`，当您使用 `NonceServer::builder()` 创建服务器时会自动使用。这适用于测试、示例或不需要持久化的单实例应用。
+#### 内存存储 (默认)
 
 ```rust
 use nonce_auth::NonceServer;
 
-// 默认使用 MemoryStorage
+// 默认使用 MemoryStorage - 适用于测试和单实例应用
 let server = NonceServer::builder()
     .build_and_init()
     .await?;
-
-// 使用特定密钥验证凭证
-server.credential_verifier(&credential)
-    .with_secret(user_secret)
-    .verify(payload)
-    .await?;
 ```
 
-### 自定义存储 (例如 SQLite, Redis)
+#### 自定义存储实现
 
-您可以通过实现 `NonceStorage` trait 来创建自定义后端。这对于需要持久化存储或跨多实例分布的应用程序是必需的。
-
-完整的参考实现，请参阅 [SQLite 示例](examples/sqlite_storage.rs)。
+实现 `NonceStorage` trait 创建自定义后端：
 
 ```rust
 use async_trait::async_trait;
@@ -98,70 +150,432 @@ use nonce_auth::storage::{NonceStorage, NonceEntry, StorageStats};
 use nonce_auth::NonceError;
 use std::time::Duration;
 
-pub struct MyCustomStorage; // 在此实现您的细节
+pub struct MyCustomStorage {
+    // 您的存储实现细节
+}
 
 #[async_trait]
 impl NonceStorage for MyCustomStorage {
-    // ... 实现所需的方法 ...
-    # async fn get(&self, nonce: &str, context: Option<&str>) -> Result<Option<NonceEntry>, NonceError> { todo!() }
-    # async fn set(&self, nonce: &str, context: Option<&str>, ttl: Duration) -> Result<(), NonceError> { todo!() }
-    # async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> { todo!() }
-    # async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> { todo!() }
-    # async fn get_stats(&self) -> Result<StorageStats, NonceError> { todo!() }
-    # async fn init(&self) -> Result<(), NonceError> { Ok(()) }
+    async fn init(&self) -> Result<(), NonceError> {
+        // 初始化存储 (创建表、连接等)
+        Ok(())
+    }
+
+    async fn get(&self, nonce: &str, context: Option<&str>) -> Result<Option<NonceEntry>, NonceError> {
+        // 检索 nonce 条目
+        todo!()
+    }
+
+    async fn set(&self, nonce: &str, context: Option<&str>, ttl: Duration) -> Result<(), NonceError> {
+        // 使用 TTL 存储 nonce
+        todo!()
+    }
+
+    async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> {
+        // 检查 nonce 是否存在 (get 的优化版本)
+        todo!()
+    }
+
+    async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> {
+        // 移除过期的 nonces，返回删除记录数
+        todo!()
+    }
+
+    async fn get_stats(&self) -> Result<StorageStats, NonceError> {
+        // 返回存储统计信息
+        Ok(StorageStats {
+            total_records: 0,
+            backend_info: "自定义存储后端".to_string(),
+        })
+    }
 }
 
-// 使用构建器模式使用自定义存储
+// 使用自定义存储
+let custom_storage = Arc::new(MyCustomStorage {});
 let server = NonceServer::builder()
-    .with_storage(Arc::new(MyCustomStorage))
+    .with_storage(custom_storage)
     .build_and_init()
     .await?;
 ```
 
-## 多密钥支持
+参考 [SQLite 示例](../examples/sqlite_storage.rs) 获取完整实现。
 
-新 API 设计的主要优势之一是单个服务器实例可以处理多个不同密钥的验证。这在以下场景中非常有用：
+## 客户端配置
 
-- 不同用户拥有不同的认证密钥
-- 不同 API 版本使用不同的密钥
-- 不同租户需要隔离的认证
-
-### 示例：多用户
+### 基础客户端用法
 
 ```rust
-use nonce_auth::NonceServer;
+use nonce_auth::NonceClient;
 
-// 创建一个服务器实例
-let server = NonceServer::builder()
-    .build_and_init()
-    .await?;
+// 使用默认设置的简单客户端 (UUID v4 nonces, 系统时间)
+let client = NonceClient::new(b"my_secret");
+let credential = client.credential_builder().sign(b"payload")?;
+```
 
-// 用户1认证
+### 高级客户端配置
+
+使用构建器模式进行完全自定义：
+
+```rust
+use nonce_auth::NonceClient;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+let client = NonceClient::builder()
+    .with_secret(b"my_secret")
+    .with_nonce_generator(|| {
+        // 自定义 nonce 生成策略
+        format!("api-req-{}", uuid::Uuid::new_v4())
+    })
+    .with_time_provider(|| {
+        // 自定义时间源 (例如，NTP 同步)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|e| nonce_auth::NonceError::CryptoError(format!("Time error: {}", e)))
+    })
+    .build();
+```
+
+#### 可用的客户端构建器方法
+
+| 方法 | 参数 | 描述 |
+|-----|------|------|
+| `with_secret(&[u8])` | 密钥字节 | 设置共享密钥 (必需) |
+| `with_nonce_generator(F)` | `F: Fn() -> String` | 自定义 nonce 生成函数 |
+| `with_time_provider(F)` | `F: Fn() -> Result<u64, NonceError>` | 自定义时间戳提供器 |
+| `build()` | - | 构建客户端 (无密钥时 panic) |
+
+### 客户端配置示例
+
+#### 测试用固定值
+
+```rust
+// 测试用的确定性值
+let test_client = NonceClient::builder()
+    .with_secret(b"test_secret")
+    .with_nonce_generator(|| "fixed-test-nonce".to_string())
+    .with_time_provider(|| Ok(1234567890))
+    .build();
+
+let credential = test_client.credential_builder().sign(b"test")?;
+assert_eq!(credential.nonce, "fixed-test-nonce");
+assert_eq!(credential.timestamp, 1234567890);
+```
+
+#### 顺序 Nonces
+
+```rust
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+let counter = Arc::new(AtomicU64::new(0));
+let counter_clone = counter.clone();
+
+let client = NonceClient::builder()
+    .with_secret(b"secret")
+    .with_nonce_generator(move || {
+        let id = counter_clone.fetch_add(1, Ordering::SeqCst);
+        format!("seq-{:010}", id)
+    })
+    .build();
+
+// 生成: seq-0000000000, seq-0000000001, seq-0000000002, ...
+```
+
+#### 自定义时间源
+
+```rust
+// NTP 同步时间或自定义时间源
+let client = NonceClient::builder()
+    .with_secret(b"secret")
+    .with_time_provider(|| {
+        // 您的自定义时间实现
+        get_ntp_synchronized_time()
+            .map_err(|e| nonce_auth::NonceError::CryptoError(format!("NTP error: {}", e)))
+    })
+    .build();
+```
+
+### 自定义签名逻辑
+
+#### 客户端自定义签名
+
+```rust
+let client = NonceClient::new(b"secret");
+
+// 标准签名 (推荐)
+let credential = client.credential_builder().sign(b"payload")?;
+
+// 带额外数据的自定义签名
+let credential = client.credential_builder()
+    .sign_with(|mac, timestamp, nonce| {
+        mac.update(timestamp.as_bytes());
+        mac.update(nonce.as_bytes());
+        mac.update(b"payload");
+        mac.update(b"extra_context_data");  // 额外的认证数据
+    })?;
+```
+
+## 凭证验证
+
+### 基础验证
+
+```rust
+// 标准验证
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(b"shared_secret")
+    .verify(b"payload")
+    .await;
+
+match result {
+    Ok(()) => println!("✓ 凭证验证成功"),
+    Err(e) => println!("✗ 验证失败: {}", e),
+}
+```
+
+### 高级验证选项
+
+```rust
+// 带上下文隔离的验证
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(user_secret)
+    .with_context(Some("api_v1"))  // 上下文特定的 nonce 隔离
+    .verify(payload)
+    .await;
+
+// 匹配自定义签名的自定义验证逻辑
+let result = server
+    .credential_verifier(&credential)
+    .with_secret(shared_secret)
+    .with_context(Some("special_context"))
+    .verify_with(|mac| {
+        mac.update(credential.timestamp.to_string().as_bytes());
+        mac.update(credential.nonce.as_bytes());
+        mac.update(payload);
+        mac.update(b"extra_context_data");  // 必须匹配客户端逻辑
+    })
+    .await;
+```
+
+#### 可用的验证方法
+
+| 方法 | 参数 | 描述 |
+|-----|------|------|
+| `with_secret(&[u8])` | 密钥字节 | 设置验证密钥 (必需) |
+| `with_context(Option<&str>)` | 上下文字符串 | 设置 nonce 隔离上下文 |
+| `verify(&[u8])` | 载荷字节 | 标准验证 |
+| `verify_with<F>(F)` | MAC 构建器闭包 | 自定义验证逻辑 |
+
+## 多密钥和上下文支持
+
+### 多用户认证
+
+```rust
+let server = NonceServer::builder().build_and_init().await?;
+
+// 不同用户使用不同的密钥
+let user1_secret = b"user1_key_12345";
+let user2_secret = b"user2_key_67890";
+
+// 用户1验证
 server.credential_verifier(&user1_credential)
     .with_secret(user1_secret)
     .verify(payload)
     .await?;
 
-// 用户2认证
+// 用户2在同一服务器实例上验证
 server.credential_verifier(&user2_credential)
     .with_secret(user2_secret)
     .verify(payload)
     .await?;
 ```
 
-### 示例：上下文隔离与不同密钥
+### 上下文隔离
 
 ```rust
-// 相同的 nonce 可以在不同上下文中使用不同密钥
+// 相同的 nonce 可以在不同上下文中使用
+let credential = client.credential_builder().sign(b"data")?;
+
+// API v1 上下文
 server.credential_verifier(&credential)
-    .with_secret(api_v1_secret)
+    .with_secret(secret)
     .with_context(Some("api_v1"))
+    .verify(b"data")
+    .await?;  // ✓ 成功
+
+// API v2 上下文 (相同 nonce，不同上下文)
+server.credential_verifier(&credential)
+    .with_secret(secret)
+    .with_context(Some("api_v2"))
+    .verify(b"data")
+    .await?;  // ✓ 成功
+
+// 在相同上下文中重用失败
+server.credential_verifier(&credential)
+    .with_secret(secret)
+    .with_context(Some("api_v1"))
+    .verify(b"data")
+    .await?;  // ✗ DuplicateNonce 错误
+```
+
+## 错误处理
+
+### 错误类型和处理
+
+```rust
+use nonce_auth::NonceError;
+
+match server.credential_verifier(&credential)
+    .with_secret(secret)
     .verify(payload)
+    .await
+{
+    Ok(()) => println!("✓ 验证成功"),
+    
+    Err(NonceError::DuplicateNonce) => {
+        // Nonce 已被使用 - 重放攻击防护
+        println!("⚠ 检测到 nonce 重用 - 可能的重放攻击");
+    },
+    
+    Err(NonceError::ExpiredNonce) => {
+        // Nonce 超过 TTL
+        println!("⚠ Nonce 已过期 - 客户端应生成新请求");
+    },
+    
+    Err(NonceError::InvalidSignature) => {
+        // 签名验证失败
+        println!("⚠ 无效签名 - 检查共享密钥或请求完整性");
+    },
+    
+    Err(NonceError::TimestampOutOfWindow) => {
+        // 时间戳超出允许窗口
+        println!("⚠ 请求时间戳超出范围 - 检查时钟同步");
+    },
+    
+    Err(NonceError::DatabaseError(msg)) => {
+        // 存储后端错误
+        println!("⚠ 存储错误: {}", msg);
+    },
+    
+    Err(NonceError::CryptoError(msg)) => {
+        // 加密操作错误
+        println!("⚠ 加密错误: {}", msg);
+    },
+}
+```
+
+## 性能和安全考虑
+
+### TTL 配置指南
+
+| 使用场景 | 推荐 TTL | 权衡 |
+|---------|---------|------|
+| 高安全性 API | 2-5 分钟 | 更好的安全性，可能影响用户体验 |
+| 标准 Web API | 5-10 分钟 | 平衡安全性/可用性 |
+| 开发/测试 | 10-30 分钟 | 对开发者友好 |
+| 批处理 | 30-60 分钟 | 适应较长的处理时间 |
+
+### 时间窗口指南
+
+| 网络条件 | 推荐窗口 | 说明 |
+|---------|---------|------|
+| 本地/局域网 | 30-60 秒 | 紧密同步 |
+| 互联网/广域网 | 60-120 秒 | 考虑网络延迟 |
+| 移动/不稳定 | 120-300 秒 | 需要更高容忍度 |
+
+### 存储后端选择
+
+| 后端 | 使用场景 | 优点 | 缺点 |
+|-----|---------|------|------|
+| MemoryStorage | 测试，单实例 | 快速，简单 | 无持久化，无扩展性 |
+| SQLite | 单实例，需要持久化 | 持久化，可靠 | 无水平扩展 |
+| Redis | 多实例，高扩展性 | 分布式，快速 | 需要额外基础设施 |
+
+### 安全最佳实践
+
+```rust
+// 生产就绪的服务器配置
+let server = NonceServer::builder()
+    .with_ttl(Duration::from_secs(300))     // 5分钟 TTL
+    .with_time_window(Duration::from_secs(60))  // 1分钟窗口
+    .with_storage(Arc::new(persistent_storage)) // 使用持久化存储
+    .build_and_init()
     .await?;
 
-server.credential_verifier(&credential)
-    .with_secret(api_v2_secret)
-    .with_context(Some("api_v2"))
-    .verify(payload)
-    .await?;
+// 定期清理防止存储膨胀
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_secs(3600)); // 每小时
+    loop {
+        interval.tick().await;
+        if let Err(e) = server.cleanup_expired_nonces(Duration::from_secs(300)).await {
+            eprintln!("清理失败: {}", e);
+        }
+    }
+});
 ```
+
+## 完整示例：生产环境设置
+
+```rust
+use nonce_auth::{NonceServer, NonceClient, NonceConfig};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. 使用生产环境设置配置服务器
+    let config = NonceConfig::production();
+    let server = NonceServer::builder()
+        .with_ttl(config.default_ttl)
+        .with_time_window(config.time_window)
+        .with_storage(Arc::new(setup_persistent_storage().await?))
+        .build_and_init()
+        .await?;
+
+    // 2. 配置带自定义 nonce 策略的客户端
+    let client = NonceClient::builder()
+        .with_secret(b"production_secret_key")
+        .with_nonce_generator(|| {
+            format!("prod-{}-{}", 
+                std::process::id(), 
+                uuid::Uuid::new_v4())
+        })
+        .build();
+
+    // 3. 定期维护
+    let server_clone = server.clone();
+    tokio::spawn(async move {
+        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            cleanup_interval.tick().await;
+            match server_clone.cleanup_expired_nonces(config.default_ttl).await {
+                Ok(count) => println!("清理了 {} 个过期 nonces", count),
+                Err(e) => eprintln!("清理错误: {}", e),
+            }
+        }
+    });
+
+    // 4. 处理请求
+    let payload = b"important_request_data";
+    let credential = client.credential_builder().sign(payload)?;
+
+    match server
+        .credential_verifier(&credential)
+        .with_secret(b"production_secret_key")
+        .with_context(Some("api_v1"))
+        .verify(payload)
+        .await
+    {
+        Ok(()) => println!("✅ 请求认证成功"),
+        Err(e) => eprintln!("❌ 认证失败: {}", e),
+    }
+
+    Ok(())
+}
+```
+
+这份全面的配置指南涵盖了 nonce-auth 库中所有可用的选项。更多示例请参阅 [examples 目录](../examples/)。
