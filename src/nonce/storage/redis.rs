@@ -311,7 +311,8 @@ impl NonceStorage for RedisStorage {
             for (key, value) in chunk.iter().zip(values.iter()) {
                 if let Some(val) = value
                     && let Ok(entry) = self.parse_entry(key, val.clone())
-                    && entry.created_at <= cutoff_time {
+                    && entry.created_at <= cutoff_time
+                {
                     to_delete.push(key.clone());
                 }
             }
