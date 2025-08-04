@@ -6,7 +6,9 @@
 
 use super::{NonceEntry, NonceStorage, StorageStats};
 use crate::NonceError;
+use crate::nonce::time_utils;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// A simple in-memory storage implementation for testing and single-instance applications.
@@ -23,6 +25,8 @@ use std::time::Duration;
 /// - **Fast operations**: All operations are in-memory and very fast
 /// - **Context isolation**: Supports nonce namespacing via contexts
 /// - **No persistence**: Data is lost when the application restarts
+/// - **Pre-allocated capacity**: Optional capacity hint for better performance
+/// - **Batch operations**: Support for bulk operations
 ///
 /// # Use Cases
 ///
@@ -53,9 +57,9 @@ use std::time::Duration;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MemoryStorage {
-    data: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, NonceEntry>>>,
+    data: std::sync::Arc<tokio::sync::RwLock<HashMap<String, NonceEntry>>>,
 }
 
 impl MemoryStorage {
@@ -69,7 +73,32 @@ impl MemoryStorage {
     /// let storage = MemoryStorage::new();
     /// ```
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            data: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Creates a new in-memory storage instance with pre-allocated capacity.
+    ///
+    /// This can improve performance when you know approximately how many nonces
+    /// you'll be storing, as it avoids HashMap reallocations.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Initial capacity hint for the internal HashMap
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::storage::MemoryStorage;
+    ///
+    /// // Pre-allocate for ~1000 nonces
+    /// let storage = MemoryStorage::with_capacity(1000);
+    /// ```
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::with_capacity(capacity))),
+        }
     }
 
     /// Creates a storage key from nonce and context.
@@ -116,10 +145,7 @@ impl NonceStorage for MemoryStorage {
         let key = Self::make_key(nonce, context);
         let entry = NonceEntry {
             nonce: nonce.to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| NonceError::CryptoError(format!("System clock error: {e}")))?
-                .as_secs() as i64,
+            created_at: time_utils::current_timestamp()?,
             context: context.map(|s| s.to_string()),
         };
 
@@ -146,11 +172,188 @@ impl NonceStorage for MemoryStorage {
 
     async fn get_stats(&self) -> Result<StorageStats, NonceError> {
         let data = self.data.read().await;
-        let memory_usage = data.len() * std::mem::size_of::<NonceEntry>();
+
+        // More accurate memory usage calculation
+        let base_entry_size = std::mem::size_of::<NonceEntry>();
+        let mut total_memory = data.len() * base_entry_size;
+
+        // Add string storage overhead
+        for (key, entry) in data.iter() {
+            total_memory += key.len(); // Key string
+            total_memory += entry.nonce.len(); // Nonce string
+            if let Some(ctx) = &entry.context {
+                total_memory += ctx.len(); // Context string
+            }
+        }
+
+        // Add HashMap overhead (approximate)
+        total_memory += data.capacity() * std::mem::size_of::<(String, NonceEntry)>();
+
         Ok(StorageStats {
             total_records: data.len(),
-            backend_info: format!("In-memory HashMap storage (~{} bytes)", memory_usage),
+            backend_info: format!(
+                "In-memory HashMap storage (~{} bytes, capacity: {})",
+                total_memory,
+                data.capacity()
+            ),
         })
+    }
+}
+
+/// Batch operations support for better performance
+impl MemoryStorage {
+    /// Insert multiple nonces in a batch operation.
+    ///
+    /// This method acquires the write lock once and performs all insertions,
+    /// which can be more efficient than individual set operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `nonces` - Vector of (nonce, context) tuples to insert
+    /// * `_ttl` - Time-to-live (not used in memory storage but kept for consistency)
+    ///
+    /// # Returns
+    ///
+    /// Number of successfully inserted nonces (duplicates are skipped)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::storage::MemoryStorage;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), nonce_auth::NonceError> {
+    /// let storage = MemoryStorage::new();
+    /// let nonces = vec![
+    ///     ("nonce1", None),
+    ///     ("nonce2", Some("ctx1")),
+    ///     ("nonce3", Some("ctx2")),
+    /// ];
+    ///
+    /// let inserted = storage.batch_set(nonces, Duration::from_secs(300)).await?;
+    /// assert_eq!(inserted, 3);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn batch_set(
+        &self,
+        nonces: Vec<(&str, Option<&str>)>,
+        _ttl: Duration,
+    ) -> Result<usize, NonceError> {
+        let created_at = time_utils::current_timestamp()?;
+        let mut data = self.data.write().await;
+        let mut success_count = 0;
+
+        for (nonce, context) in nonces {
+            let key = Self::make_key(nonce, context);
+
+            if let std::collections::hash_map::Entry::Vacant(e) = data.entry(key) {
+                let entry = NonceEntry {
+                    nonce: nonce.to_string(),
+                    created_at,
+                    context: context.map(|s| s.to_string()),
+                };
+                e.insert(entry);
+                success_count += 1;
+            }
+            // Skip duplicates silently in batch operation
+        }
+
+        Ok(success_count)
+    }
+
+    /// Check existence of multiple nonces in a batch operation.
+    ///
+    /// This method acquires the read lock once and checks all nonces,
+    /// which can be more efficient than individual exists operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `nonces` - Vector of (nonce, context) tuples to check
+    ///
+    /// # Returns
+    ///
+    /// Vector of boolean values indicating existence for each nonce
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::storage::MemoryStorage;
+    ///
+    /// # async fn example() -> Result<(), nonce_auth::NonceError> {
+    /// let storage = MemoryStorage::new();
+    /// let check_nonces = vec![
+    ///     ("nonce1", None),
+    ///     ("nonce2", Some("ctx1")),
+    /// ];
+    ///
+    /// let results = storage.batch_exists(check_nonces).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn batch_exists(
+        &self,
+        nonces: Vec<(&str, Option<&str>)>,
+    ) -> Result<Vec<bool>, NonceError> {
+        let data = self.data.read().await;
+        let mut results = Vec::with_capacity(nonces.len());
+
+        for (nonce, context) in nonces {
+            let key = Self::make_key(nonce, context);
+            results.push(data.contains_key(&key));
+        }
+
+        Ok(results)
+    }
+
+    /// Get multiple nonces in a batch operation.
+    ///
+    /// This method acquires the read lock once and retrieves all nonces,
+    /// which can be more efficient than individual get operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `nonces` - Vector of (nonce, context) tuples to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Vector of optional NonceEntry values
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nonce_auth::storage::MemoryStorage;
+    ///
+    /// # async fn example() -> Result<(), nonce_auth::NonceError> {
+    /// let storage = MemoryStorage::new();
+    /// let get_nonces = vec![
+    ///     ("nonce1", None),
+    ///     ("nonce2", Some("ctx1")),
+    /// ];
+    ///
+    /// let results = storage.batch_get(get_nonces).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn batch_get(
+        &self,
+        nonces: Vec<(&str, Option<&str>)>,
+    ) -> Result<Vec<Option<NonceEntry>>, NonceError> {
+        let data = self.data.read().await;
+        let mut results = Vec::with_capacity(nonces.len());
+
+        for (nonce, context) in nonces {
+            let key = Self::make_key(nonce, context);
+            results.push(data.get(&key).cloned());
+        }
+
+        Ok(results)
+    }
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -270,6 +473,64 @@ mod tests {
         assert_eq!(stats.total_records, 2);
         assert!(stats.backend_info.contains("In-memory"));
         assert!(stats.backend_info.contains("bytes"));
+        assert!(stats.backend_info.contains("capacity"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_storage_with_capacity() -> Result<(), NonceError> {
+        let storage = MemoryStorage::with_capacity(100);
+
+        // Add some nonces
+        storage.set("test1", None, Duration::from_secs(300)).await?;
+        storage
+            .set("test2", Some("ctx"), Duration::from_secs(300))
+            .await?;
+
+        let stats = storage.get_stats().await?;
+        assert_eq!(stats.total_records, 2);
+        // Should have pre-allocated capacity
+        assert!(stats.backend_info.contains("capacity"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_operations() -> Result<(), NonceError> {
+        let storage = MemoryStorage::new();
+
+        // Test batch_set
+        let nonces = vec![
+            ("batch1", None),
+            ("batch2", Some("ctx1")),
+            ("batch3", Some("ctx2")),
+            ("batch1", None), // Duplicate, should be skipped
+        ];
+
+        let inserted = storage.batch_set(nonces, Duration::from_secs(300)).await?;
+        assert_eq!(inserted, 3); // Only 3 unique nonces inserted
+
+        // Test batch_exists
+        let check_nonces = vec![
+            ("batch1", None),
+            ("batch2", Some("ctx1")),
+            ("batch3", Some("ctx2")),
+            ("batch4", None), // Doesn't exist
+        ];
+
+        let exists_results = storage.batch_exists(check_nonces).await?;
+        assert_eq!(exists_results, vec![true, true, true, false]);
+
+        // Test batch_get
+        let get_nonces = vec![
+            ("batch1", None),
+            ("batch4", None), // Doesn't exist
+        ];
+
+        let get_results = storage.batch_get(get_nonces).await?;
+        assert!(get_results[0].is_some());
+        assert!(get_results[1].is_none());
 
         Ok(())
     }
@@ -306,6 +567,30 @@ mod tests {
         // Verify all nonces were stored
         let stats = storage.get_stats().await?;
         assert_eq!(stats.total_records, 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_memory_usage_calculation() -> Result<(), NonceError> {
+        let storage = MemoryStorage::new();
+
+        // Add nonces with various sizes
+        storage.set("short", None, Duration::from_secs(300)).await?;
+        storage
+            .set(
+                "very_long_nonce_name_for_testing",
+                Some("long_context_name"),
+                Duration::from_secs(300),
+            )
+            .await?;
+
+        let stats = storage.get_stats().await?;
+        assert_eq!(stats.total_records, 2);
+
+        // Memory usage should account for string lengths
+        assert!(stats.backend_info.contains("bytes"));
+        assert!(stats.backend_info.contains("capacity"));
 
         Ok(())
     }

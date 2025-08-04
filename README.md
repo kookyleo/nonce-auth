@@ -11,47 +11,52 @@ A lightweight, secure nonce-based authentication library for Rust, designed to p
 
 ## Core Features
 
-- **Replay Protection**: Employs nonces, timestamps, and HMAC-SHA256 signatures to ensure each request is unique and authentic.
-- **Safe & Ergonomic API**: Uses a builder pattern (`credential_builder`) to guide developers towards safe usage, preventing common security pitfalls.
-- **Async & Pluggable Storage**: Fully asynchronous design with a trait-based storage system, allowing for easy integration with backends like in-memory, SQLite, or Redis.
+- **🛡️ Replay Protection**: Combines nonces, timestamps, and HMAC-SHA256 signatures to ensure each request is unique and authentic
+- **🚀 Simple & Ergonomic**: Clean builder pattern API that guides developers towards secure usage
+- **⚡ Async & Pluggable**: Fully asynchronous with pluggable storage backends (Memory, Redis, SQLite, etc.)
+- **🔧 Flexible Configuration**: Customizable TTL, time windows, nonce generation, and secret management
 
 ## Quick Start
 
+```bash
+cargo add nonce-auth tokio
+```
+
+### Quick Start
+
 ```rust
-use nonce_auth::{NonceClient, NonceServer};
+use nonce_auth::{CredentialBuilder, CredentialVerifier, storage::MemoryStorage, storage::NonceStorage};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Shared secret between client and server
+    // Shared secret between credential creator and verifier
     let secret = b"my-super-secret-key";
     let payload = b"important_api_request_data";
 
-    // Create server (defaults to in-memory storage)
-    let server = NonceServer::builder()
-        .build_and_init()
+    // Create storage backend (in-memory for this example)
+    let storage: Arc<dyn NonceStorage> = Arc::new(MemoryStorage::new());
+
+    // 1. Create a credential
+    let credential = CredentialBuilder::new(secret)
+        .sign(payload)?;
+
+    println!("✅ Generated credential with nonce: {}", credential.nonce);
+
+    // 2. Verify the credential
+    CredentialVerifier::new(Arc::clone(&storage))
+        .with_secret(secret)
+        .verify(&credential, payload)
         .await?;
 
-    // Create client and generate a credential
-    let client = NonceClient::new(secret);
-    let credential = client.credential_builder().sign(payload)?;
-
-    // Server verifies the credential with the secret
-    let result = server
-        .credential_verifier(&credential)
-        .with_secret(secret)
-        .verify(payload)
-        .await;
-    
-    assert!(result.is_ok());
     println!("✅ First verification successful!");
 
-    // Replay attack is automatically rejected
-    let replay_result = server
-        .credential_verifier(&credential)
+    // 3. Replay attack is automatically rejected
+    let replay_result = CredentialVerifier::new(storage)
         .with_secret(secret)
-        .verify(payload)
+        .verify(&credential, payload)
         .await;
-    
+
     assert!(replay_result.is_err());
     println!("✅ Replay attack correctly rejected!");
 
@@ -59,10 +64,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Configuration & Examples
+For more advanced usage, see [`examples`](examples/) and [User Guide](docs/USERGUIDE.md).
 
-- For detailed configuration of TTL, time windows, storage backends, and client customization, see [CONFIGURATION.md](docs/CONFIGURATION.md).
-- For more advanced usage, including a full web server implementation, see the [examples](examples/) directory.
+## Storage Backends
+
+- **Memory** (`MemoryStorage`): Fast, built-in, perfect for single-instance applications
+- **Redis** (`RedisStorage`): Distributed, production-ready, with connection pooling (feature: `redis-storage`)
+- **SQLite** (`SQLiteStorage`): Supports WAL mode, with connection pooling (feature: `sqlite-storage`)
+- **Custom**: Implement `NonceStorage` trait for your own backend
+
+## Configuration
+
+The library provides several configuration approaches:
+
+- **Presets**: `ConfigPreset::Production`, `ConfigPreset::Development`, `ConfigPreset::HighSecurity`
+- **Environment Variables**: `NONCE_AUTH_STORAGE_TTL`, `NONCE_AUTH_DEFAULT_TIME_WINDOW`
+- **Custom Configuration**: Fine-grained control via builder methods
+
+For detailed configuration options, see [User Guide](docs/USERGUIDE.md).
+
+## Examples
+
+- [`simple.rs`](examples/simple.rs) - Basic credential creation and verification
+- [`web.rs`](examples/web.rs) - Web demo
+- [`sqlite_storage.rs`](examples/sqlite_storage.rs) - SQLite storage backend
+- [`redis_example.rs`](examples/redis_example.rs) - Redis with connection pooling
+- [`performance_test.rs`](examples/performance_test.rs) - Performance benchmarking
+
+## Documentation
+
+- [Complete User Guide](docs/USERGUIDE.md) - Comprehensive API documentation
+- [API Documentation](https://docs.rs/nonce-auth) - Generated API docs
+
+## Security Features
+
+- **HMAC-SHA256** signatures for tamper detection
+- **Timestamp validation** with configurable time windows
+- **Nonce uniqueness** enforcement to prevent replay attacks
+- **Context isolation** for multi-tenant applications
+- **Constant-time comparisons** to prevent timing attacks
+
+## Performance
+
+- **Zero-copy verification** where possible
+- **Async-first design** for high concurrency
+- **Connection pooling** for Redis backend
+- **Batch operations** for improved throughput
+- **Configurable cleanup strategies** for optimal memory usage
 
 ## License
 

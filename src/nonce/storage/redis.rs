@@ -7,8 +7,10 @@ use super::{NonceEntry, NonceStorage, StorageStats};
 use crate::NonceError;
 use crate::nonce::time_utils;
 use async_trait::async_trait;
-use redis::{AsyncCommands, Client};
+use redis::{AsyncCommands, Client, aio::MultiplexedConnection};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 /// Redis-based storage backend for nonce persistence.
 ///
@@ -20,8 +22,10 @@ use std::time::Duration;
 /// - **Distributed storage**: Shared state across multiple application instances
 /// - **TTL support**: Automatic expiration using Redis TTL
 /// - **Context isolation**: Supports nonce namespacing via key prefixes
-/// - **High performance**: Leverages Redis's in-memory architecture
+/// - **High performance**: Leverages Redis's in-memory architecture with connection pooling
 /// - **Atomic operations**: Uses Redis commands for thread-safe operations
+/// - **Connection pooling**: Reuses connections for better performance
+/// - **Production-safe**: Uses SCAN instead of KEYS for better performance
 ///
 /// # Example
 ///
@@ -41,6 +45,8 @@ use std::time::Duration;
 pub struct RedisStorage {
     client: Client,
     key_prefix: String,
+    /// Shared persistent connection for better performance
+    conn: Arc<Mutex<Option<MultiplexedConnection>>>,
 }
 
 impl RedisStorage {
@@ -75,12 +81,46 @@ impl RedisStorage {
     /// ```
     pub fn new(redis_url: &str, key_prefix: &str) -> Result<Self, NonceError> {
         let client = Client::open(redis_url)
-            .map_err(|e| NonceError::from_database_message(format!("Redis client error: {}", e)))?;
+            .map_err(|e| NonceError::from_storage_message(format!("Redis client error: {}", e)))?;
 
         Ok(Self {
             client,
             key_prefix: key_prefix.to_string(),
+            conn: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Get or create a persistent connection
+    async fn get_connection(&self) -> Result<MultiplexedConnection, NonceError> {
+        let mut conn_guard = self.conn.lock().await;
+
+        // Check if we have an existing connection
+        if let Some(conn) = conn_guard.as_ref() {
+            // Test if connection is still alive
+            let mut test_conn = conn.clone();
+            match redis::cmd("PING")
+                .query_async::<_, String>(&mut test_conn)
+                .await
+            {
+                Ok(_) => return Ok(conn.clone()),
+                Err(_) => {
+                    // Connection is dead, remove it
+                    *conn_guard = None;
+                }
+            }
+        }
+
+        // Create new connection
+        let new_conn = self
+            .client
+            .get_multiplexed_tokio_connection()
+            .await
+            .map_err(|e| {
+                NonceError::from_storage_message(format!("Redis connection failed: {}", e))
+            })?;
+
+        *conn_guard = Some(new_conn.clone());
+        Ok(new_conn)
     }
 
     /// Create a Redis key for the given nonce and context.
@@ -110,14 +150,14 @@ impl RedisStorage {
     fn parse_entry(&self, key: &str, value: String) -> Result<NonceEntry, NonceError> {
         let parts: Vec<&str> = value.split(':').collect();
         if parts.len() != 2 {
-            return Err(NonceError::from_database_message(
+            return Err(NonceError::from_storage_message(
                 "Invalid Redis value format",
             ));
         }
 
         let created_at: i64 = parts[1]
             .parse()
-            .map_err(|_| NonceError::from_database_message("Invalid timestamp in Redis value"))?;
+            .map_err(|_| NonceError::from_storage_message("Invalid timestamp in Redis value"))?;
 
         // Extract nonce and context from key
         let key_parts: Vec<&str> = key.split(':').collect();
@@ -128,9 +168,7 @@ impl RedisStorage {
             // Format: prefix:nonce
             (key_parts[1].to_string(), None)
         } else {
-            return Err(NonceError::from_database_message(
-                "Invalid Redis key format",
-            ));
+            return Err(NonceError::from_storage_message("Invalid Redis key format"));
         };
 
         Ok(NonceEntry {
@@ -139,25 +177,47 @@ impl RedisStorage {
             context,
         })
     }
+
+    /// Scan keys with pattern using SCAN instead of KEYS for production safety
+    async fn scan_keys(&self, pattern: &str) -> Result<Vec<String>, NonceError> {
+        let mut conn = self.get_connection().await?;
+        let mut keys = Vec::new();
+        let mut cursor = 0u64;
+
+        loop {
+            let (new_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(100) // Process 100 keys at a time
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+            keys.extend(batch);
+            cursor = new_cursor;
+
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        Ok(keys)
+    }
 }
 
 #[async_trait]
 impl NonceStorage for RedisStorage {
     async fn init(&self) -> Result<(), NonceError> {
-        // Test Redis connection
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| {
-                NonceError::from_database_message(format!("Redis connection failed: {}", e))
-            })?;
+        // Initialize connection and test Redis
+        let mut conn = self.get_connection().await?;
 
         // Verify Redis is accessible with a ping
         let _: String = redis::cmd("PING")
             .query_async(&mut conn)
             .await
-            .map_err(|e| NonceError::from_database_message(format!("Redis ping failed: {}", e)))?;
+            .map_err(|e| NonceError::from_storage_message(format!("Redis ping failed: {}", e)))?;
 
         Ok(())
     }
@@ -167,18 +227,13 @@ impl NonceStorage for RedisStorage {
         nonce: &str,
         context: Option<&str>,
     ) -> Result<Option<NonceEntry>, NonceError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
-
+        let mut conn = self.get_connection().await?;
         let key = self.make_key(nonce, context);
 
         let value: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         match value {
             Some(val) => Ok(Some(self.parse_entry(&key, val)?)),
@@ -192,14 +247,9 @@ impl NonceStorage for RedisStorage {
         context: Option<&str>,
         ttl: Duration,
     ) -> Result<(), NonceError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
-
+        let mut conn = self.get_connection().await?;
         let key = self.make_key(nonce, context);
-        let created_at = time_utils::current_timestamp();
+        let created_at = time_utils::current_timestamp()?;
 
         // Optimize value string allocation
         let created_at_str = created_at.to_string();
@@ -207,7 +257,8 @@ impl NonceStorage for RedisStorage {
         value.push_str(nonce);
         value.push(':');
         value.push_str(&created_at_str);
-        let ttl_secs = ttl.as_secs() as usize;
+        // Redis requires TTL in seconds, minimum 1 second
+        let ttl_secs = ttl.as_secs().max(1) as usize;
 
         // Use SET with EX and NX (set if not exists)
         let result: Result<Option<String>, _> = conn
@@ -223,60 +274,59 @@ impl NonceStorage for RedisStorage {
         match result {
             Ok(Some(_)) => Ok(()),
             Ok(None) => Err(NonceError::DuplicateNonce), // Key already exists
-            Err(e) => Err(NonceError::from_database_message(e.to_string())),
+            Err(e) => Err(NonceError::from_storage_message(e.to_string())),
         }
     }
 
     async fn exists(&self, nonce: &str, context: Option<&str>) -> Result<bool, NonceError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
-
+        let mut conn = self.get_connection().await?;
         let key = self.make_key(nonce, context);
 
         let exists: bool = conn
             .exists(&key)
             .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(exists)
     }
 
     async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        let mut conn = self.get_connection().await?;
 
-        // Get all keys matching our prefix
+        // Use SCAN instead of KEYS for production safety
         let pattern = format!("{}:*", self.key_prefix);
-        let keys: Vec<String> = conn
-            .keys(&pattern)
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        let keys = self.scan_keys(&pattern).await?;
 
         let mut deleted_count = 0;
+        let mut to_delete = Vec::new();
 
-        // Check each key and delete if expired
-        for key in &keys {
-            let value: Option<String> = conn
-                .get(key)
+        // Batch get values to check expiration
+        for chunk in keys.chunks(100) {
+            let values: Vec<Option<String>> = redis::cmd("MGET")
+                .arg(chunk)
+                .query_async(&mut conn)
                 .await
-                .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
-            if let Some(val) = value {
-                if let Ok(entry) = self.parse_entry(key, val) {
-                    if entry.created_at <= cutoff_time {
-                        let deleted: usize = conn
-                            .del(key)
-                            .await
-                            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
-                        deleted_count += deleted;
+            for (key, value) in chunk.iter().zip(values.iter()) {
+                if let Some(val) = value {
+                    if let Ok(entry) = self.parse_entry(key, val.clone()) {
+                        if entry.created_at <= cutoff_time {
+                            to_delete.push(key.clone());
+                        }
                     }
                 }
+            }
+        }
+
+        // Batch delete expired keys
+        for chunk in to_delete.chunks(100) {
+            if !chunk.is_empty() {
+                let deleted: usize = conn
+                    .del(chunk)
+                    .await
+                    .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+                deleted_count += deleted;
             }
         }
 
@@ -284,25 +334,19 @@ impl NonceStorage for RedisStorage {
     }
 
     async fn get_stats(&self) -> Result<StorageStats, NonceError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_tokio_connection()
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        let mut conn = self.get_connection().await?;
 
-        // Count keys matching our prefix
+        // Count keys using SCAN instead of KEYS
         let pattern = format!("{}:*", self.key_prefix);
-        let keys: Vec<String> = conn
-            .keys(&pattern)
-            .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        let keys = self.scan_keys(&pattern).await?;
+        let total_records = keys.len();
 
         // Get Redis server info for additional stats
         let info: String = redis::cmd("INFO")
             .arg("memory")
             .query_async(&mut conn)
             .await
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         // Extract memory usage from info string
         let memory_usage = info
@@ -312,9 +356,9 @@ impl NonceStorage for RedisStorage {
             .unwrap_or("unknown");
 
         Ok(StorageStats {
-            total_records: keys.len(),
+            total_records,
             backend_info: format!(
-                "Redis storage (memory: {}, prefix: {})",
+                "Redis storage (memory: {}, prefix: {}, persistent conn)",
                 memory_usage, self.key_prefix
             ),
         })
@@ -335,7 +379,7 @@ mod tests {
             Ok(()) => Ok(storage),
             Err(_) => {
                 println!("Skipping Redis tests - no Redis server available");
-                Err(NonceError::from_database_message("Redis not available"))
+                Err(NonceError::from_storage_message("Redis not available"))
             }
         }
     }
@@ -491,8 +535,62 @@ mod tests {
         assert_eq!(stats.total_records, 2);
         assert!(stats.backend_info.contains("Redis"));
         assert!(stats.backend_info.contains("test_nonce_auth"));
+        assert!(stats.backend_info.contains("persistent conn"));
 
         // Cleanup
         let _ = storage.cleanup_expired(9999999999).await;
+    }
+
+    #[tokio::test]
+    async fn test_redis_connection_reuse() {
+        let storage = match get_test_storage().await {
+            Ok(s) => s,
+            Err(_) => return, // Skip test if Redis not available
+        };
+
+        // Clean up any existing test data
+        let _ = storage.cleanup_expired(9999999999).await;
+
+        // Multiple operations should reuse the same connection
+        for i in 0..10 {
+            let nonce = format!("conn-test-{}", i);
+            storage
+                .set(&nonce, None, Duration::from_secs(60))
+                .await
+                .unwrap();
+
+            assert!(storage.exists(&nonce, None).await.unwrap());
+        }
+
+        // Cleanup
+        let _ = storage.cleanup_expired(9999999999).await;
+    }
+
+    #[tokio::test]
+    async fn test_redis_scan_performance() {
+        let storage = match get_test_storage().await {
+            Ok(s) => s,
+            Err(_) => return, // Skip test if Redis not available
+        };
+
+        // Clean up any existing test data
+        let _ = storage.cleanup_expired(9999999999).await;
+
+        // Add many nonces
+        for i in 0..100 {
+            let nonce = format!("scan-test-{}", i);
+            storage
+                .set(&nonce, None, Duration::from_secs(300))
+                .await
+                .unwrap();
+        }
+
+        // Test stats (uses SCAN)
+        let stats = storage.get_stats().await.unwrap();
+        assert!(stats.total_records >= 100);
+
+        // Cleanup (uses SCAN and batch delete)
+        let deleted = storage.cleanup_expired(9999999999).await.unwrap();
+        assert!(deleted >= 100);
     }
 }

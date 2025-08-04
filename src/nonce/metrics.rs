@@ -36,12 +36,12 @@ pub struct NonceMetrics {
 pub struct ErrorMetrics {
     /// Duplicate nonce errors
     pub duplicate_nonce: u64,
-    /// Expired nonce errors  
-    pub expired_nonce: u64,
+    /// Timestamp out of window errors
+    pub timestamp_out_of_window: u64,
     /// Invalid signature errors
     pub invalid_signature: u64,
-    /// Database/storage errors
-    pub database_errors: u64,
+    /// Storage backend errors
+    pub storage_errors: u64,
     /// Cryptographic errors
     pub crypto_errors: u64,
     /// Other errors
@@ -221,9 +221,9 @@ pub struct InMemoryMetricsCollector {
 
     // Error counts
     duplicate_nonce_errors: AtomicU64,
-    expired_nonce_errors: AtomicU64,
+    timestamp_out_of_window_errors: AtomicU64,
     invalid_signature_errors: AtomicU64,
-    database_errors: AtomicU64,
+    storage_errors: AtomicU64,
     crypto_errors: AtomicU64,
     other_errors: AtomicU64,
 
@@ -247,9 +247,9 @@ impl InMemoryMetricsCollector {
             storage_operations: AtomicU64::new(0),
             cleanup_operations: AtomicU64::new(0),
             duplicate_nonce_errors: AtomicU64::new(0),
-            expired_nonce_errors: AtomicU64::new(0),
+            timestamp_out_of_window_errors: AtomicU64::new(0),
             invalid_signature_errors: AtomicU64::new(0),
-            database_errors: AtomicU64::new(0),
+            storage_errors: AtomicU64::new(0),
             crypto_errors: AtomicU64::new(0),
             other_errors: AtomicU64::new(0),
             generation_time_total: AtomicU64::new(0),
@@ -308,15 +308,16 @@ impl MetricsCollector for InMemoryMetricsCollector {
                 "duplicate_nonce" => {
                     self.duplicate_nonce_errors.fetch_add(1, Ordering::Relaxed);
                 }
-                "expired_nonce" => {
-                    self.expired_nonce_errors.fetch_add(1, Ordering::Relaxed);
+                "timestamp_out_of_window" => {
+                    self.timestamp_out_of_window_errors
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 "invalid_signature" => {
                     self.invalid_signature_errors
                         .fetch_add(1, Ordering::Relaxed);
                 }
-                "database_error" => {
-                    self.database_errors.fetch_add(1, Ordering::Relaxed);
+                "storage_error" => {
+                    self.storage_errors.fetch_add(1, Ordering::Relaxed);
                 }
                 "crypto_error" => {
                     self.crypto_errors.fetch_add(1, Ordering::Relaxed);
@@ -342,9 +343,11 @@ impl MetricsCollector for InMemoryMetricsCollector {
             cleanup_operations: self.cleanup_operations.load(Ordering::Relaxed),
             error_counts: ErrorMetrics {
                 duplicate_nonce: self.duplicate_nonce_errors.load(Ordering::Relaxed),
-                expired_nonce: self.expired_nonce_errors.load(Ordering::Relaxed),
+                timestamp_out_of_window: self
+                    .timestamp_out_of_window_errors
+                    .load(Ordering::Relaxed),
                 invalid_signature: self.invalid_signature_errors.load(Ordering::Relaxed),
-                database_errors: self.database_errors.load(Ordering::Relaxed),
+                storage_errors: self.storage_errors.load(Ordering::Relaxed),
                 crypto_errors: self.crypto_errors.load(Ordering::Relaxed),
                 other_errors: self.other_errors.load(Ordering::Relaxed),
             },
@@ -378,9 +381,10 @@ impl MetricsCollector for InMemoryMetricsCollector {
         self.storage_operations.store(0, Ordering::Relaxed);
         self.cleanup_operations.store(0, Ordering::Relaxed);
         self.duplicate_nonce_errors.store(0, Ordering::Relaxed);
-        self.expired_nonce_errors.store(0, Ordering::Relaxed);
+        self.timestamp_out_of_window_errors
+            .store(0, Ordering::Relaxed);
         self.invalid_signature_errors.store(0, Ordering::Relaxed);
-        self.database_errors.store(0, Ordering::Relaxed);
+        self.storage_errors.store(0, Ordering::Relaxed);
         self.crypto_errors.store(0, Ordering::Relaxed);
         self.other_errors.store(0, Ordering::Relaxed);
         self.generation_time_total.store(0, Ordering::Relaxed);
@@ -611,9 +615,9 @@ mod tests {
         // Test different error types using error codes
         let error_codes = vec![
             "duplicate_nonce",
-            "expired_nonce",
+            "timestamp_out_of_window",
             "invalid_signature",
-            "database_error",
+            "storage_error",
             "crypto_error",
             "invalid_input",
         ];
@@ -630,9 +634,9 @@ mod tests {
 
         let metrics = collector.get_metrics().await?;
         assert_eq!(metrics.error_counts.duplicate_nonce, 1);
-        assert_eq!(metrics.error_counts.expired_nonce, 1);
+        assert_eq!(metrics.error_counts.timestamp_out_of_window, 1);
         assert_eq!(metrics.error_counts.invalid_signature, 1);
-        assert_eq!(metrics.error_counts.database_errors, 1);
+        assert_eq!(metrics.error_counts.storage_errors, 1);
         assert_eq!(metrics.error_counts.crypto_errors, 1);
         assert_eq!(metrics.error_counts.other_errors, 1);
 
@@ -666,6 +670,312 @@ mod tests {
         let metrics = collector.get_metrics().await?;
         assert_eq!(metrics.nonces_generated, 100);
         assert!(metrics.performance.sample_count >= 100);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_performance_averages_calculation() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Record generation events with known durations
+        collector
+            .record_event(MetricEvent::NonceGenerated {
+                duration: Duration::from_micros(100),
+                context: None,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::NonceGenerated {
+                duration: Duration::from_micros(200),
+                context: None,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::NonceGenerated {
+                duration: Duration::from_micros(300),
+                context: None,
+            })
+            .await;
+
+        // Record verification events
+        collector
+            .record_event(MetricEvent::VerificationAttempt {
+                duration: Duration::from_micros(500),
+                success: true,
+                context: None,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::VerificationAttempt {
+                duration: Duration::from_micros(700),
+                success: false,
+                context: None,
+            })
+            .await;
+
+        // Record storage events
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "set".to_string(),
+                duration: Duration::from_micros(150),
+                success: true,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "get".to_string(),
+                duration: Duration::from_micros(50),
+                success: true,
+            })
+            .await;
+
+        let metrics = collector.get_metrics().await?;
+
+        // Test average calculations
+        assert_eq!(metrics.performance.avg_generation_time_us, 200); // (100+200+300)/3
+        assert_eq!(metrics.performance.avg_verification_time_us, 600); // (500+700)/2
+        assert_eq!(metrics.performance.avg_storage_time_us, 100); // (150+50)/2
+        assert_eq!(metrics.performance.sample_count, 7); // 3+2+2
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_storage_operation_success_tracking() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Record successful storage operations
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "set".to_string(),
+                duration: Duration::from_micros(100),
+                success: true,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "get".to_string(),
+                duration: Duration::from_micros(50),
+                success: true,
+            })
+            .await;
+
+        // Record failed storage operation
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "cleanup".to_string(),
+                duration: Duration::from_micros(200),
+                success: false,
+            })
+            .await;
+
+        let metrics = collector.get_metrics().await?;
+
+        // Only successful operations should be counted in storage_operations
+        assert_eq!(metrics.storage_operations, 2);
+        // But all operations should contribute to timing averages
+        assert_eq!(metrics.performance.avg_storage_time_us, 116); // (100+50+200)/3
+        assert_eq!(metrics.performance.sample_count, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_operations_tracking() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Record cleanup operations
+        collector
+            .record_event(MetricEvent::CleanupOperation {
+                items_cleaned: 100,
+                duration: Duration::from_millis(5),
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::CleanupOperation {
+                items_cleaned: 50,
+                duration: Duration::from_millis(2),
+            })
+            .await;
+
+        let metrics = collector.get_metrics().await?;
+        assert_eq!(metrics.cleanup_operations, 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reset_comprehensive() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Fill up all metrics
+        collector
+            .record_event(MetricEvent::NonceGenerated {
+                duration: Duration::from_micros(100),
+                context: Some("test".to_string()),
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::VerificationAttempt {
+                duration: Duration::from_micros(200),
+                success: true,
+                context: None,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::StorageOperation {
+                operation: "set".to_string(),
+                duration: Duration::from_micros(50),
+                success: true,
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::CleanupOperation {
+                items_cleaned: 10,
+                duration: Duration::from_millis(1),
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::Error {
+                error_code: "invalid_signature",
+                error_message: "Test error".to_string(),
+                context: None,
+            })
+            .await;
+
+        // Verify metrics were recorded
+        let before_reset = collector.get_metrics().await?;
+        assert!(before_reset.nonces_generated > 0);
+        assert!(before_reset.verification_attempts > 0);
+        assert!(before_reset.storage_operations > 0);
+        assert!(before_reset.cleanup_operations > 0);
+        assert!(before_reset.error_counts.invalid_signature > 0);
+        assert!(before_reset.performance.sample_count > 0);
+
+        // Reset metrics
+        collector.reset_metrics().await?;
+
+        // Verify all metrics are zero
+        let after_reset = collector.get_metrics().await?;
+        assert_eq!(after_reset.nonces_generated, 0);
+        assert_eq!(after_reset.verification_attempts, 0);
+        assert_eq!(after_reset.verification_successes, 0);
+        assert_eq!(after_reset.verification_failures, 0);
+        assert_eq!(after_reset.storage_operations, 0);
+        assert_eq!(after_reset.cleanup_operations, 0);
+        assert_eq!(after_reset.error_counts.duplicate_nonce, 0);
+        assert_eq!(after_reset.error_counts.timestamp_out_of_window, 0);
+        assert_eq!(after_reset.error_counts.invalid_signature, 0);
+        assert_eq!(after_reset.error_counts.storage_errors, 0);
+        assert_eq!(after_reset.error_counts.crypto_errors, 0);
+        assert_eq!(after_reset.error_counts.other_errors, 0);
+        assert_eq!(after_reset.performance.avg_generation_time_us, 0);
+        assert_eq!(after_reset.performance.avg_verification_time_us, 0);
+        assert_eq!(after_reset.performance.avg_storage_time_us, 0);
+        assert_eq!(after_reset.performance.sample_count, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metrics_timer_reset_and_reuse() -> Result<(), NonceError> {
+        let collector = Arc::new(InMemoryMetricsCollector::new());
+        let mut timer = MetricsTimer::new(Arc::clone(&collector) as Arc<dyn MetricsCollector>);
+
+        // First timing
+        let result1 = timer
+            .time_async(async {
+                sleep(TokioDuration::from_millis(10)).await;
+                Ok::<i32, NonceError>(1)
+            })
+            .await?;
+
+        let first_elapsed = timer.elapsed();
+        timer
+            .record(MetricEvent::NonceGenerated {
+                duration: first_elapsed,
+                context: None,
+            })
+            .await;
+
+        // Reset and reuse timer
+        timer.reset();
+        let result2 = timer
+            .time_async(async {
+                sleep(TokioDuration::from_millis(5)).await;
+                Ok::<i32, NonceError>(2)
+            })
+            .await?;
+
+        let second_elapsed = timer.elapsed();
+        timer
+            .record(MetricEvent::VerificationAttempt {
+                duration: second_elapsed,
+                success: true,
+                context: None,
+            })
+            .await;
+
+        assert_eq!(result1, 1);
+        assert_eq!(result2, 2);
+        assert!(first_elapsed >= Duration::from_millis(10));
+        assert!(second_elapsed >= Duration::from_millis(5));
+        assert!(second_elapsed < first_elapsed); // Second timing should be shorter
+
+        let metrics = collector.get_metrics().await?;
+        assert_eq!(metrics.nonces_generated, 1);
+        assert_eq!(metrics.verification_attempts, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_edge_cases_zero_samples() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Get metrics without any events - should not panic and return zeros
+        let metrics = collector.get_metrics().await?;
+        assert_eq!(metrics.performance.avg_generation_time_us, 0);
+        assert_eq!(metrics.performance.avg_verification_time_us, 0);
+        assert_eq!(metrics.performance.avg_storage_time_us, 0);
+        assert_eq!(metrics.performance.sample_count, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_context_information_preservation() -> Result<(), NonceError> {
+        let collector = InMemoryMetricsCollector::new();
+
+        // Record events with different contexts
+        collector
+            .record_event(MetricEvent::NonceGenerated {
+                duration: Duration::from_micros(100),
+                context: Some("user123".to_string()),
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::VerificationAttempt {
+                duration: Duration::from_micros(200),
+                success: true,
+                context: Some("api_key_auth".to_string()),
+            })
+            .await;
+        collector
+            .record_event(MetricEvent::Error {
+                error_code: "duplicate_nonce",
+                error_message: "Nonce already used".to_string(),
+                context: Some("mobile_app".to_string()),
+            })
+            .await;
+
+        // Even though contexts are passed, the counts should still be correct
+        let metrics = collector.get_metrics().await?;
+        assert_eq!(metrics.nonces_generated, 1);
+        assert_eq!(metrics.verification_attempts, 1);
+        assert_eq!(metrics.verification_successes, 1);
+        assert_eq!(metrics.error_counts.duplicate_nonce, 1);
 
         Ok(())
     }

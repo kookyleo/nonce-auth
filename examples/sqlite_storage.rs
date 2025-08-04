@@ -37,7 +37,7 @@ impl SqliteStorage {
             Connection::open(db_path)
         };
 
-        let connection = connection.map_err(NonceError::from_database_error)?;
+        let connection = connection.map_err(NonceError::from_storage_error)?;
 
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -60,20 +60,20 @@ impl SqliteStorage {
             "#,
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         // Create indexes for better performance
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_nonce_context ON nonce_record (nonce, context)",
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_created_at ON nonce_record (created_at)",
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(())
     }
@@ -95,7 +95,7 @@ impl NonceStorage for SqliteStorage {
 
         let mut stmt = conn
             .prepare("SELECT nonce, created_at, context FROM nonce_record WHERE nonce = ?1 AND context = ?2")
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         let result = stmt.query_row(params![nonce, context], |row| {
             Ok(NonceEntry {
@@ -111,7 +111,7 @@ impl NonceStorage for SqliteStorage {
         match result {
             Ok(entry) => Ok(Some(entry)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(NonceError::from_database_message(e.to_string())),
+            Err(e) => Err(NonceError::from_storage_message(e.to_string())),
         }
     }
 
@@ -139,7 +139,7 @@ impl NonceStorage for SqliteStorage {
             {
                 NonceError::DuplicateNonce
             }
-            _ => NonceError::from_database_message(e.to_string()),
+            _ => NonceError::from_storage_message(e.to_string()),
         })?;
 
         Ok(())
@@ -151,11 +151,11 @@ impl NonceStorage for SqliteStorage {
 
         let mut stmt = conn
             .prepare("SELECT 1 FROM nonce_record WHERE nonce = ?1 AND context = ?2")
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         let exists = stmt
             .exists(params![nonce, context])
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(exists)
     }
@@ -168,7 +168,7 @@ impl NonceStorage for SqliteStorage {
                 "DELETE FROM nonce_record WHERE created_at <= ?1",
                 params![cutoff_time],
             )
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(changes)
     }
@@ -178,7 +178,7 @@ impl NonceStorage for SqliteStorage {
 
         let count: usize = conn
             .query_row("SELECT COUNT(*) FROM nonce_record", [], |row| row.get(0))
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(StorageStats {
             total_records: count,
@@ -314,31 +314,24 @@ mod tests {
 // Example usage
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use nonce_auth::{NonceClient, NonceServer};
+    use nonce_auth::{CredentialBuilder, CredentialVerifier, storage::NonceStorage};
     use std::sync::Arc;
 
     // Create SQLite storage backend
-    let storage = Arc::new(SqliteStorage::new("nonce_auth.db")?);
+    let storage: Arc<dyn NonceStorage> = Arc::new(SqliteStorage::new("nonce_auth.db")?);
+    storage.init().await?;
 
-    // Create client and server
+    // Generate a credential
     let secret = b"shared_secret_key";
-    let client = NonceClient::new(secret);
-    let server = NonceServer::builder()
-        .with_storage(storage.clone())
-        .build_and_init()
-        .await?;
-
-    // Client generates a credential
     let payload = b"database_payload";
-    let credential = client.credential_builder().sign(payload)?;
+    let credential = CredentialBuilder::new(secret).sign(payload)?;
 
     println!("Generated credential: {credential:?}");
 
-    // Server verifies the credential using the standard method
-    match server
-        .credential_verifier(&credential)
+    // Verify the credential using SQLite storage
+    match CredentialVerifier::new(Arc::clone(&storage))
         .with_secret(secret)
-        .verify(payload)
+        .verify(&credential, payload)
         .await
     {
         Ok(()) => println!("✅ Authentication verified successfully"),

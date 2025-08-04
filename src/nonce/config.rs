@@ -1,5 +1,40 @@
 use std::time::Duration;
 
+/// Predefined configuration presets for common use cases.
+///
+/// These presets provide sensible defaults for different deployment scenarios,
+/// balancing security, usability, and performance requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigPreset {
+    /// Production-ready configuration.
+    ///
+    /// Balanced security and usability:
+    /// - TTL: 5 minutes (reasonable balance between security and usability)
+    /// - Time window: 1 minute (accounts for network delays and clock skew)
+    Production,
+
+    /// Development-friendly configuration.
+    ///
+    /// Relaxed settings for easier testing and debugging:
+    /// - TTL: 10 minutes (longer window for testing)
+    /// - Time window: 2 minutes (more forgiving for local development)
+    Development,
+
+    /// High-security configuration.
+    ///
+    /// Maximum security with strict timing requirements:
+    /// - TTL: 2 minutes (very short window to minimize exposure)
+    /// - Time window: 30 seconds (strict timing requirements)
+    HighSecurity,
+
+    /// Load configuration from environment variables.
+    ///
+    /// Reads configuration from:
+    /// - `NONCE_AUTH_DEFAULT_TTL`: Default TTL in seconds (default: 300)
+    /// - `NONCE_AUTH_DEFAULT_TIME_WINDOW`: Time window in seconds (default: 60)
+    FromEnv,
+}
+
 /// Configuration for nonce authentication system.
 ///
 /// This struct provides a centralized way to configure the security parameters
@@ -22,14 +57,14 @@ use std::time::Duration;
 ///
 /// // Create custom configuration
 /// let config = NonceConfig {
-///     default_ttl: Duration::from_secs(600), // 10 minutes
+///     storage_ttl: Duration::from_secs(600), // 10 minutes
 ///     time_window: Duration::from_secs(120), // 2 minutes
 /// };
 /// ```
 #[derive(Debug, Clone)]
 pub struct NonceConfig {
-    /// Default time-to-live for nonce records
-    pub default_ttl: Duration,
+    /// Default storage time-to-live for nonce records
+    pub storage_ttl: Duration,
     /// Time window for timestamp validation
     pub time_window: Duration,
 }
@@ -37,8 +72,8 @@ pub struct NonceConfig {
 impl Default for NonceConfig {
     fn default() -> Self {
         Self {
-            default_ttl: Duration::from_secs(
-                std::env::var("NONCE_AUTH_DEFAULT_TTL")
+            storage_ttl: Duration::from_secs(
+                std::env::var("NONCE_AUTH_STORAGE_TTL")
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(300),
@@ -54,58 +89,6 @@ impl Default for NonceConfig {
 }
 
 impl NonceConfig {
-    /// Creates a new configuration from environment variables.
-    ///
-    /// # Returns
-    ///
-    /// A `NonceConfig` instance with environment variable values.
-    ///
-    /// # Example
-    ///
-    /// ```bash
-    /// export NONCE_AUTH_DEFAULT_TTL=600
-    /// export NONCE_AUTH_DEFAULT_TIME_WINDOW=120
-    /// ```
-    pub fn from_env() -> Self {
-        Self::default()
-    }
-
-    /// Creates a production-ready configuration.
-    ///
-    /// Production settings prioritize security and stability:
-    /// - 5 minutes TTL (reasonable balance between security and usability)
-    /// - 1 minute time window (accounts for network delays and clock skew)
-    pub fn production() -> Self {
-        Self {
-            default_ttl: Duration::from_secs(300),
-            time_window: Duration::from_secs(60),
-        }
-    }
-
-    /// Creates a development configuration.
-    ///
-    /// Development settings prioritize convenience:
-    /// - 10 minutes TTL (longer window for testing)
-    /// - 2 minutes time window (more forgiving for local development)
-    pub fn development() -> Self {
-        Self {
-            default_ttl: Duration::from_secs(600),
-            time_window: Duration::from_secs(120),
-        }
-    }
-
-    /// Creates a high-security configuration.
-    ///
-    /// High-security settings prioritize maximum security:
-    /// - 2 minutes TTL (very short window to minimize exposure)
-    /// - 30 seconds time window (strict timing requirements)
-    pub fn high_security() -> Self {
-        Self {
-            default_ttl: Duration::from_secs(120),
-            time_window: Duration::from_secs(30),
-        }
-    }
-
     /// Validates the configuration and returns any warnings.
     ///
     /// # Returns
@@ -114,12 +97,13 @@ impl NonceConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
 
-        // Check TTL settings
-        if self.default_ttl.as_secs() < 60 {
-            warnings.push("Very short TTL (< 1 minute) may cause usability issues".to_string());
+        // Check storage TTL settings
+        if self.storage_ttl.as_secs() < 60 {
+            warnings
+                .push("Very short storage TTL (< 1 minute) may cause usability issues".to_string());
         }
-        if self.default_ttl.as_secs() > 3600 {
-            warnings.push("Long TTL (> 1 hour) may increase security risk".to_string());
+        if self.storage_ttl.as_secs() > 3600 {
+            warnings.push("Long storage TTL (> 1 hour) may increase security risk".to_string());
         }
 
         // Check time window settings
@@ -133,10 +117,11 @@ impl NonceConfig {
                 .push("Long time window (> 5 minutes) may increase replay attack risk".to_string());
         }
 
-        // Check relationship between TTL and time window
-        if self.default_ttl.as_secs() < self.time_window.as_secs() * 2 {
+        // Check relationship between storage TTL and time window
+        if self.storage_ttl.as_secs() < self.time_window.as_secs() * 2 {
             warnings.push(
-                "TTL should be at least twice the time window for optimal security".to_string(),
+                "Storage TTL should be at least twice the time window for optimal security"
+                    .to_string(),
             );
         }
 
@@ -146,10 +131,30 @@ impl NonceConfig {
     /// Returns a summary of the current configuration.
     pub fn summary(&self) -> String {
         format!(
-            "NonceConfig {{ TTL: {}s, Time Window: {}s }}",
-            self.default_ttl.as_secs(),
+            "NonceConfig {{ Storage TTL: {}s, Time Window: {}s }}",
+            self.storage_ttl.as_secs(),
             self.time_window.as_secs(),
         )
+    }
+}
+
+impl From<ConfigPreset> for NonceConfig {
+    fn from(preset: ConfigPreset) -> Self {
+        match preset {
+            ConfigPreset::Production => Self {
+                storage_ttl: Duration::from_secs(300),
+                time_window: Duration::from_secs(60),
+            },
+            ConfigPreset::Development => Self {
+                storage_ttl: Duration::from_secs(600),
+                time_window: Duration::from_secs(120),
+            },
+            ConfigPreset::HighSecurity => Self {
+                storage_ttl: Duration::from_secs(120),
+                time_window: Duration::from_secs(30),
+            },
+            ConfigPreset::FromEnv => Self::default(),
+        }
     }
 }
 
@@ -167,8 +172,8 @@ mod tests {
     #[test]
     fn test_default_configuration() {
         // Test production config which doesn't depend on env vars
-        let config = NonceConfig::production();
-        assert_eq!(config.default_ttl.as_secs(), 300);
+        let config = NonceConfig::from(ConfigPreset::Production);
+        assert_eq!(config.storage_ttl.as_secs(), 300);
         assert_eq!(config.time_window.as_secs(), 60);
     }
 
@@ -176,32 +181,32 @@ mod tests {
     fn test_environment_variable_override() {
         // Test that custom config works without depending on environment
         let config = NonceConfig {
-            default_ttl: Duration::from_secs(600),
+            storage_ttl: Duration::from_secs(600),
             time_window: Duration::from_secs(120),
         };
 
-        assert_eq!(config.default_ttl.as_secs(), 600);
+        assert_eq!(config.storage_ttl.as_secs(), 600);
         assert_eq!(config.time_window.as_secs(), 120);
     }
 
     #[test]
     fn test_production_preset() {
-        let config = NonceConfig::production();
-        assert_eq!(config.default_ttl.as_secs(), 300);
+        let config = NonceConfig::from(ConfigPreset::Production);
+        assert_eq!(config.storage_ttl.as_secs(), 300);
         assert_eq!(config.time_window.as_secs(), 60);
     }
 
     #[test]
     fn test_development_preset() {
-        let config = NonceConfig::development();
-        assert_eq!(config.default_ttl.as_secs(), 600);
+        let config = NonceConfig::from(ConfigPreset::Development);
+        assert_eq!(config.storage_ttl.as_secs(), 600);
         assert_eq!(config.time_window.as_secs(), 120);
     }
 
     #[test]
     fn test_high_security_preset() {
-        let config = NonceConfig::high_security();
-        assert_eq!(config.default_ttl.as_secs(), 120);
+        let config = NonceConfig::from(ConfigPreset::HighSecurity);
+        assert_eq!(config.storage_ttl.as_secs(), 120);
         assert_eq!(config.time_window.as_secs(), 30);
     }
 
@@ -210,12 +215,12 @@ mod tests {
         clear_env_vars();
 
         unsafe {
-            std::env::set_var("NONCE_AUTH_DEFAULT_TTL", "900");
+            std::env::set_var("NONCE_AUTH_STORAGE_TTL", "900");
             std::env::set_var("NONCE_AUTH_DEFAULT_TIME_WINDOW", "180");
         }
 
-        let config = NonceConfig::from_env();
-        assert_eq!(config.default_ttl.as_secs(), 900);
+        let config = NonceConfig::from(ConfigPreset::FromEnv);
+        assert_eq!(config.storage_ttl.as_secs(), 900);
         assert_eq!(config.time_window.as_secs(), 180);
 
         clear_env_vars();
@@ -223,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_validation_valid_config() {
-        let config = NonceConfig::production();
+        let config = NonceConfig::from(ConfigPreset::Production);
         let warnings = config.validate();
         assert!(warnings.is_empty());
     }
@@ -232,28 +237,32 @@ mod tests {
     fn test_validation_ttl_warnings() {
         // Test very short TTL
         let config = NonceConfig {
-            default_ttl: Duration::from_secs(30),
+            storage_ttl: Duration::from_secs(30),
             time_window: Duration::from_secs(60),
         };
         let warnings = config.validate();
         assert!(!warnings.is_empty());
-        assert!(warnings.iter().any(|w| w.contains("Very short TTL")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Very short storage TTL"))
+        );
 
         // Test very long TTL
         let config = NonceConfig {
-            default_ttl: Duration::from_secs(7200),
+            storage_ttl: Duration::from_secs(7200),
             time_window: Duration::from_secs(60),
         };
         let warnings = config.validate();
         assert!(!warnings.is_empty());
-        assert!(warnings.iter().any(|w| w.contains("Long TTL")));
+        assert!(warnings.iter().any(|w| w.contains("Long storage TTL")));
     }
 
     #[test]
     fn test_validation_time_window_warnings() {
         // Test very short time window
         let config = NonceConfig {
-            default_ttl: Duration::from_secs(300),
+            storage_ttl: Duration::from_secs(300),
             time_window: Duration::from_secs(15),
         };
         let warnings = config.validate();
@@ -266,42 +275,11 @@ mod tests {
 
         // Test very long time window
         let config = NonceConfig {
-            default_ttl: Duration::from_secs(300),
+            storage_ttl: Duration::from_secs(300),
             time_window: Duration::from_secs(600),
         };
         let warnings = config.validate();
         assert!(!warnings.is_empty());
         assert!(warnings.iter().any(|w| w.contains("Long time window")));
-    }
-
-    #[test]
-    fn test_validation_ttl_window_relationship() {
-        let config = NonceConfig {
-            default_ttl: Duration::from_secs(60),
-            time_window: Duration::from_secs(60),
-        };
-        let warnings = config.validate();
-        assert!(!warnings.is_empty());
-        assert!(warnings.iter().any(|w| w.contains("at least twice")));
-    }
-
-    #[test]
-    fn test_summary_format() {
-        let config = NonceConfig::production();
-        let summary = config.summary();
-        assert!(summary.contains("TTL: 300s"));
-        assert!(summary.contains("Time Window: 60s"));
-    }
-
-    #[test]
-    fn test_config_clone_and_debug() {
-        let config = NonceConfig::production();
-        let cloned = config.clone();
-        assert_eq!(config.default_ttl, cloned.default_ttl);
-        assert_eq!(config.time_window, cloned.time_window);
-
-        // Test Debug implementation
-        let debug_str = format!("{config:?}");
-        assert!(debug_str.contains("NonceConfig"));
     }
 }

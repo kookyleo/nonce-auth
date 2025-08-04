@@ -5,10 +5,11 @@
 
 use super::{NonceEntry, NonceStorage, StorageStats};
 use crate::NonceError;
+use crate::nonce::time_utils;
 use async_trait::async_trait;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// SQLite-based storage backend for nonce persistence.
 ///
@@ -22,6 +23,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// - **Automatic indexing**: Optimized queries for nonce lookup and cleanup
 /// - **Thread-safe**: Uses Arc<Mutex<Connection>> for concurrent access
 /// - **ACID compliance**: Leverages SQLite's transactional guarantees
+/// - **WAL mode**: Better concurrent read performance (for file-based databases)
+/// - **Prepared statement caching**: Improved query performance
 ///
 /// # Example
 ///
@@ -40,6 +43,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// ```
 pub struct SqliteStorage {
     connection: Arc<Mutex<Connection>>,
+    is_memory: bool,
 }
 
 impl SqliteStorage {
@@ -69,50 +73,83 @@ impl SqliteStorage {
     /// # }
     /// ```
     pub fn new(db_path: &str) -> Result<Self, NonceError> {
-        let connection = if db_path == ":memory:" {
+        let is_memory = db_path == ":memory:";
+        let connection = if is_memory {
             Connection::open_in_memory()
         } else {
             Connection::open(db_path)
         };
 
-        let connection = connection.map_err(NonceError::from_database_error)?;
+        let connection = connection.map_err(NonceError::from_storage_error)?;
+
+        // Enable optimizations
+        if !is_memory {
+            // WAL mode for better concurrency (file-based only)
+            let _: String = connection
+                .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+        }
+
+        // Performance optimizations
+        connection
+            .execute("PRAGMA synchronous=NORMAL", [])
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+        connection
+            .execute("PRAGMA cache_size=10000", [])
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+        connection
+            .execute("PRAGMA temp_store=MEMORY", [])
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        // Enable prepared statement caching
+        connection.set_prepared_statement_cache_capacity(20);
 
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            is_memory,
         })
     }
 
     /// Create the database schema if it doesn't exist.
     fn init_schema(&self) -> Result<(), NonceError> {
-        let conn = self.connection.lock().unwrap();
+        let mut conn = self.connection.lock().unwrap();
 
-        // Create main table
-        conn.execute(
+        // Use transaction for schema creation
+        let tx = conn
+            .transaction()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        // Create main table with optimized schema
+        tx.execute(
             r#"
             CREATE TABLE IF NOT EXISTS nonce_record (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nonce TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                context TEXT DEFAULT '',
+                context TEXT NOT NULL DEFAULT '',
                 UNIQUE(nonce, context)
             )
             "#,
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
-        // Create performance indexes
-        conn.execute(
+        // Create composite index for better query performance
+        tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_nonce_context ON nonce_record (nonce, context)",
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
-        conn.execute(
+        // Index for cleanup operations
+        tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_created_at ON nonce_record (created_at)",
             [],
         )
-        .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(())
     }
@@ -132,11 +169,12 @@ impl NonceStorage for SqliteStorage {
         let context = context.unwrap_or("");
         let conn = self.connection.lock().unwrap();
 
+        // Use cached prepared statement
         let mut stmt = conn
-            .prepare("SELECT nonce, created_at, context FROM nonce_record WHERE nonce = ?1 AND context = ?2")
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .prepare_cached("SELECT nonce, created_at, context FROM nonce_record WHERE nonce = ?1 AND context = ?2")
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
-        let result = stmt.query_row(params![nonce, context], |row| {
+        stmt.query_row(params![nonce, context], |row| {
             Ok(NonceEntry {
                 nonce: row.get(0)?,
                 created_at: row.get(1)?,
@@ -145,13 +183,9 @@ impl NonceStorage for SqliteStorage {
                     if ctx.is_empty() { None } else { Some(ctx) }
                 },
             })
-        });
-
-        match result {
-            Ok(entry) => Ok(Some(entry)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(NonceError::from_database_message(e.to_string())),
-        }
+        })
+        .optional()
+        .map_err(|e| NonceError::from_storage_message(e.to_string()))
     }
 
     async fn set(
@@ -161,25 +195,26 @@ impl NonceStorage for SqliteStorage {
         _ttl: Duration,
     ) -> Result<(), NonceError> {
         let context = context.unwrap_or("");
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let created_at = time_utils::current_timestamp()?;
 
         let conn = self.connection.lock().unwrap();
 
-        conn.execute(
-            "INSERT INTO nonce_record (nonce, created_at, context) VALUES (?1, ?2, ?3)",
-            params![nonce, created_at, context],
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::SqliteFailure(sqlite_err, _)
-                if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                NonceError::DuplicateNonce
-            }
-            _ => NonceError::from_database_message(e.to_string()),
-        })?;
+        // Use cached prepared statement
+        let mut stmt = conn
+            .prepare_cached(
+                "INSERT INTO nonce_record (nonce, created_at, context) VALUES (?1, ?2, ?3)",
+            )
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        stmt.execute(params![nonce, created_at, context])
+            .map_err(|e| match e {
+                rusqlite::Error::SqliteFailure(sqlite_err, _)
+                    if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    NonceError::DuplicateNonce
+                }
+                _ => NonceError::from_storage_message(e.to_string()),
+            })?;
 
         Ok(())
     }
@@ -188,26 +223,37 @@ impl NonceStorage for SqliteStorage {
         let context = context.unwrap_or("");
         let conn = self.connection.lock().unwrap();
 
+        // Use cached prepared statement with LIMIT 1 for efficiency
         let mut stmt = conn
-            .prepare("SELECT 1 FROM nonce_record WHERE nonce = ?1 AND context = ?2")
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .prepare_cached("SELECT 1 FROM nonce_record WHERE nonce = ?1 AND context = ?2 LIMIT 1")
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         let exists = stmt
             .exists(params![nonce, context])
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(exists)
     }
 
     async fn cleanup_expired(&self, cutoff_time: i64) -> Result<usize, NonceError> {
-        let conn = self.connection.lock().unwrap();
+        let mut conn = self.connection.lock().unwrap();
 
-        let changes = conn
-            .execute(
-                "DELETE FROM nonce_record WHERE created_at <= ?1",
-                params![cutoff_time],
-            )
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        // Use transaction for better performance on large deletions
+        let tx = conn
+            .transaction()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        let changes = {
+            let mut stmt = tx
+                .prepare_cached("DELETE FROM nonce_record WHERE created_at <= ?1")
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+            stmt.execute(params![cutoff_time])
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?
+        };
+
+        tx.commit()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         Ok(changes)
     }
@@ -215,9 +261,14 @@ impl NonceStorage for SqliteStorage {
     async fn get_stats(&self) -> Result<StorageStats, NonceError> {
         let conn = self.connection.lock().unwrap();
 
-        let count: usize = conn
-            .query_row("SELECT COUNT(*) FROM nonce_record", [], |row| row.get(0))
-            .map_err(|e| NonceError::from_database_message(e.to_string()))?;
+        // Use cached prepared statement
+        let mut stmt = conn
+            .prepare_cached("SELECT COUNT(*) FROM nonce_record")
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        let count: usize = stmt
+            .query_row([], |row| row.get(0))
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
         // Get additional SQLite-specific stats
         let db_size: i64 = conn
@@ -230,10 +281,89 @@ impl NonceStorage for SqliteStorage {
 
         let size_bytes = db_size * page_size;
 
+        let mode = if self.is_memory {
+            "in-memory"
+        } else {
+            "WAL mode"
+        };
+
         Ok(StorageStats {
             total_records: count,
-            backend_info: format!("SQLite storage ({} bytes, {} pages)", size_bytes, db_size),
+            backend_info: format!(
+                "SQLite storage ({} bytes, {} pages, {})",
+                size_bytes, db_size, mode
+            ),
         })
+    }
+}
+
+/// Batch operations support for better performance
+impl SqliteStorage {
+    /// Insert multiple nonces in a single transaction
+    pub async fn batch_set(
+        &self,
+        nonces: Vec<(&str, Option<&str>)>,
+        _ttl: Duration,
+    ) -> Result<usize, NonceError> {
+        let mut conn = self.connection.lock().unwrap();
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        let created_at = time_utils::current_timestamp()?;
+        let mut success_count = 0;
+
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO nonce_record (nonce, created_at, context) VALUES (?1, ?2, ?3)",
+                )
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+            for (nonce, context) in nonces {
+                let context = context.unwrap_or("");
+                match stmt.execute(params![nonce, created_at, context]) {
+                    Ok(_) => success_count += 1,
+                    Err(rusqlite::Error::SqliteFailure(sqlite_err, _))
+                        if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                    {
+                        // Skip duplicates in batch operation
+                        continue;
+                    }
+                    Err(e) => return Err(NonceError::from_storage_message(e.to_string())),
+                }
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        Ok(success_count)
+    }
+
+    /// Check multiple nonces existence in a single query
+    pub async fn batch_exists(
+        &self,
+        nonces: Vec<(&str, Option<&str>)>,
+    ) -> Result<Vec<bool>, NonceError> {
+        let conn = self.connection.lock().unwrap();
+        let mut results = Vec::with_capacity(nonces.len());
+
+        // Use cached prepared statement
+        let mut stmt = conn
+            .prepare_cached("SELECT 1 FROM nonce_record WHERE nonce = ?1 AND context = ?2 LIMIT 1")
+            .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+
+        for (nonce, context) in nonces {
+            let context = context.unwrap_or("");
+            let exists = stmt
+                .exists(params![nonce, context])
+                .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
+            results.push(exists);
+        }
+
+        Ok(results)
     }
 }
 
@@ -362,6 +492,36 @@ mod tests {
         assert_eq!(stats.total_records, 2);
         assert!(stats.backend_info.contains("SQLite"));
         assert!(stats.backend_info.contains("bytes"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_operations() -> Result<(), NonceError> {
+        let storage = SqliteStorage::new(":memory:")?;
+        storage.init().await?;
+
+        // Test batch insert
+        let nonces = vec![
+            ("batch-1", None),
+            ("batch-2", Some("ctx1")),
+            ("batch-3", Some("ctx2")),
+            ("batch-1", None), // Duplicate, should be skipped
+        ];
+
+        let inserted = storage.batch_set(nonces, Duration::from_secs(60)).await?;
+        assert_eq!(inserted, 3); // Only 3 successful inserts
+
+        // Test batch exists
+        let check_nonces = vec![
+            ("batch-1", None),
+            ("batch-2", Some("ctx1")),
+            ("batch-3", Some("ctx2")),
+            ("batch-4", None), // Doesn't exist
+        ];
+
+        let exists_results = storage.batch_exists(check_nonces).await?;
+        assert_eq!(exists_results, vec![true, true, true, false]);
 
         Ok(())
     }

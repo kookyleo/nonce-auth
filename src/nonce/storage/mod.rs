@@ -52,8 +52,8 @@ pub struct StorageStats {
 /// # Available Implementations
 ///
 /// - [`MemoryStorage`] - Always available, in-memory HashMap-based storage
-/// - [`SqliteStorage`] - Available with `sqlite-storage` feature, persistent SQLite storage
-/// - [`RedisStorage`] - Available with `redis-storage` feature, distributed Redis storage
+/// - `SqliteStorage` - Available with `sqlite-storage` feature, persistent SQLite storage
+/// - `RedisStorage` - Available with `redis-storage` feature, distributed Redis storage
 ///
 /// # Thread Safety
 ///

@@ -1,9 +1,11 @@
-use hmac::Mac;
-use nonce_auth::NonceServer;
+use base64::Engine;
+use hmac::{Hmac, Mac};
+use nonce_auth::{NonceCredential, NonceError, storage::MemoryStorage, storage::NonceStorage};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use warp::Filter;
 
 #[derive(Deserialize)]
@@ -27,6 +29,55 @@ fn generate_psk() -> String {
     let mut key = [0u8; 32]; // 256-bit key
     rng.fill_bytes(&mut key);
     hex::encode(key)
+}
+
+// Manual verification function to avoid CredentialVerifier Sync issues
+async fn verify_credential(
+    credential: &NonceCredential,
+    payload: &[u8],
+    secret: &[u8],
+    storage: Arc<dyn NonceStorage>,
+    time_window: Duration,
+    storage_ttl: Duration,
+) -> Result<(), NonceError> {
+    // 1. Validate timestamp is within time window
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| NonceError::CryptoError(format!("Time error: {}", e)))?
+        .as_secs();
+
+    let time_diff = if current_time >= credential.timestamp {
+        current_time - credential.timestamp
+    } else {
+        credential.timestamp - current_time
+    };
+
+    if time_diff > time_window.as_secs() {
+        return Err(NonceError::TimestampOutOfWindow);
+    }
+
+    // 2. Verify signature
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+
+    mac.update(credential.timestamp.to_string().as_bytes());
+    mac.update(credential.nonce.as_bytes());
+    mac.update(payload);
+
+    let expected_signature =
+        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    if expected_signature != credential.signature {
+        return Err(NonceError::InvalidSignature);
+    }
+
+    // 3. Check nonce uniqueness and store if unique
+    if storage.exists(&credential.nonce, None).await? {
+        return Err(NonceError::DuplicateNonce);
+    }
+
+    storage.set(&credential.nonce, None, storage_ttl).await?;
+    Ok(())
 }
 
 // Function to generate HTML with embedded PSK and session ID
@@ -146,7 +197,8 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
         
         class NonceClient {{
             constructor(psk) {{
-                this.psk = new TextEncoder().encode(psk);
+                // PSK is a hex string, convert it to bytes
+                this.psk = new Uint8Array(psk.match(/.{{1,2}}/g).map(byte => parseInt(byte, 16)));
                 this.lastRequest = null;
             }}
 
@@ -199,9 +251,13 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
                     
                     const signature = await crypto.subtle.sign('HMAC', key, data);
                     
-                    return Array.from(new Uint8Array(signature))
-                        .map(b => b.toString(16).padStart(2, '0'))
-                        .join('');
+                    // Convert to base64 to match Rust server expectation
+                    const signatureArray = new Uint8Array(signature);
+                    let binary = '';
+                    for (let i = 0; i < signatureArray.byteLength; i++) {{
+                        binary += String.fromCharCode(signatureArray[i]);
+                    }}
+                    return btoa(binary);
                 }} catch (error) {{
                     console.error('Signing failed:', error);
                     throw error;
@@ -289,23 +345,22 @@ fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
     )
 }
 
-// Store PSKs and NonceServers for each session
+// Store PSKs and storage backends for each session
 type PskStore = Arc<std::sync::Mutex<HashMap<String, String>>>;
-type ServerStore =
-    Arc<tokio::sync::Mutex<HashMap<String, Arc<NonceServer<nonce_auth::storage::MemoryStorage>>>>>;
+type StorageStore = Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn NonceStorage>>>>;
 
 #[tokio::main]
 async fn main() {
-    // Create PSK store and server store
+    // Create PSK store and storage store
     let psk_store: PskStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
-    let server_store: ServerStore = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let storage_store: StorageStore = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // Serve index.html at the root path with embedded PSK
     let psk_store_filter = warp::any().map(move || psk_store.clone());
-    let server_store_filter = warp::any().map(move || server_store.clone());
+    let storage_store_filter = warp::any().map(move || storage_store.clone());
     let index_route = warp::path::end()
         .and(psk_store_filter.clone())
-        .and(server_store_filter.clone())
+        .and(storage_store_filter.clone())
         .and_then(handle_index_request);
 
     // Protected API route
@@ -314,7 +369,7 @@ async fn main() {
         .and(warp::post())
         .and(warp::body::json())
         .and(psk_store_filter)
-        .and(server_store_filter)
+        .and(storage_store_filter)
         .and_then(handle_protected_request);
 
     // Combine routes
@@ -334,7 +389,7 @@ async fn main() {
 
 async fn handle_index_request(
     psk_store: PskStore,
-    server_store: ServerStore,
+    storage_store: StorageStore,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Generate a new PSK and session ID for this page load
     let psk = generate_psk();
@@ -347,10 +402,10 @@ async fn handle_index_request(
         println!("Stored PSK for session ID: {session_id}");
     }
 
-    // Clean up the server for this session (if it exists)
+    // Clean up the storage for this session (if it exists)
     {
-        let mut servers = server_store.lock().await;
-        servers.remove(&session_id);
+        let mut storages = storage_store.lock().await;
+        storages.remove(&session_id);
     }
 
     // Generate HTML with embedded PSK and session ID
@@ -361,7 +416,7 @@ async fn handle_index_request(
 async fn handle_protected_request(
     req: AuthenticatedRequest,
     psk_store: PskStore,
-    server_store: ServerStore,
+    storage_store: StorageStore,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     // Get the PSK from store using session ID
     let psk = {
@@ -382,37 +437,43 @@ async fn handle_protected_request(
         }
     };
 
-    // Get or create the server for this session
-    let server = {
-        let mut servers = server_store.lock().await;
-        match servers.get(&req.session_id) {
-            Some(server) => server.clone(),
+    // Get or create the storage for this session
+    let storage = {
+        let mut storages = storage_store.lock().await;
+        match storages.get(&req.session_id) {
+            Some(storage) => storage.clone(),
             None => {
-                // Create a new server for this session
-                let new_server = NonceServer::builder()
-                    .with_ttl(Duration::from_secs(60)) // 1 minute TTL
-                    .with_time_window(Duration::from_secs(15)) // 15 seconds time window
-                    .build_and_init()
+                // Create a new storage for this session
+                let new_storage: Arc<dyn NonceStorage> = Arc::new(MemoryStorage::new());
+                new_storage
+                    .init()
                     .await
-                    .expect("Failed to initialize server");
-                let server = Arc::new(new_server);
-                servers.insert(req.session_id.clone(), server.clone());
-                server
+                    .expect("Failed to initialize storage");
+                storages.insert(req.session_id.clone(), new_storage.clone());
+                new_storage
             }
         }
     };
 
-    // Verify the request using the custom logic verifier
-    match server
-        .credential_verifier(&req.auth)
-        .with_secret(psk.as_bytes())
-        .verify_with(|mac| {
-            mac.update(req.auth.timestamp.to_string().as_bytes());
-            mac.update(req.auth.nonce.as_bytes());
-            mac.update(req.payload.as_bytes());
+    // Convert hex PSK to bytes
+    let psk_bytes = hex::decode(&psk)
+        .inspect_err(|e| {
+            println!("Failed to decode PSK: {}", e);
         })
-        .await
-    {
+        .unwrap_or_else(|_| psk.as_bytes().to_vec());
+
+    // Manual verification to avoid CredentialVerifier Sync issues
+    let result = verify_credential(
+        &req.auth,
+        req.payload.as_bytes(),
+        &psk_bytes,
+        storage,
+        Duration::from_secs(15), // time window
+        Duration::from_secs(60), // storage ttl
+    )
+    .await;
+
+    match result {
         Ok(()) => {
             let response = ApiResponse {
                 success: true,
