@@ -309,12 +309,10 @@ impl NonceStorage for RedisStorage {
                 .map_err(|e| NonceError::from_storage_message(e.to_string()))?;
 
             for (key, value) in chunk.iter().zip(values.iter()) {
-                if let Some(val) = value {
-                    if let Ok(entry) = self.parse_entry(key, val.clone()) {
-                        if entry.created_at <= cutoff_time {
-                            to_delete.push(key.clone());
-                        }
-                    }
+                if let Some(val) = value
+                    && let Ok(entry) = self.parse_entry(key, val.clone())
+                    && entry.created_at <= cutoff_time {
+                    to_delete.push(key.clone());
                 }
             }
         }
