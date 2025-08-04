@@ -152,9 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while (tasks.join_next().await).is_some() {}
     let elapsed = start.elapsed();
 
-    println!(
-        "✅ 100 concurrent operations (5 tasks × 20) completed in {elapsed:?}"
-    );
+    println!("✅ 100 concurrent operations (5 tasks × 20) completed in {elapsed:?}");
     println!("   Rate: {:.0} ops/second", 100.0 / elapsed.as_secs_f64());
 
     println!("\n5. Storage Statistics");
