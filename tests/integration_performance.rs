@@ -73,7 +73,7 @@ async fn test_storage_backend_comparison() {
     let result = benchmark("Memory sequential writes", dataset_size, || async {
         for i in 0..dataset_size {
             memory_storage
-                .set(&format!("test-{}", i), None, Duration::from_secs(60))
+                .set(&format!("test-{i}"), None, Duration::from_secs(60))
                 .await
                 .unwrap();
         }
@@ -91,7 +91,7 @@ async fn test_storage_backend_comparison() {
         let result = benchmark("SQLite sequential writes", dataset_size, || async {
             for i in 0..dataset_size {
                 sqlite_storage
-                    .set(&format!("test-{}", i), None, Duration::from_secs(60))
+                    .set(&format!("test-{i}"), None, Duration::from_secs(60))
                     .await
                     .unwrap();
             }
@@ -113,7 +113,7 @@ async fn test_storage_backend_comparison() {
                 let result = benchmark("Redis sequential writes", dataset_size, || async {
                     for i in 0..dataset_size {
                         redis_storage
-                            .set(&format!("test-{}", i), None, Duration::from_secs(60))
+                            .set(&format!("test-{i}"), None, Duration::from_secs(60))
                             .await
                             .unwrap();
                     }
@@ -196,7 +196,7 @@ async fn test_performance_regression_detection() {
     let writes_result = benchmark("Regression test - writes", 1000, || async {
         for i in 0..1000 {
             memory_storage
-                .set(&format!("regr-{}", i), None, Duration::from_secs(60))
+                .set(&format!("regr-{i}"), None, Duration::from_secs(60))
                 .await
                 .unwrap();
         }
@@ -206,7 +206,7 @@ async fn test_performance_regression_detection() {
     let reads_result = benchmark("Regression test - reads", 1000, || async {
         for i in 0..1000 {
             let _ = memory_storage
-                .get(&format!("regr-{}", i), None)
+                .get(&format!("regr-{i}"), None)
                 .await
                 .unwrap();
         }

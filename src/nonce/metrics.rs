@@ -626,7 +626,7 @@ mod tests {
             collector
                 .record_event(MetricEvent::Error {
                     error_code,
-                    error_message: format!("Test error: {}", error_code),
+                    error_message: format!("Test error: {error_code}"),
                     context: None,
                 })
                 .await;

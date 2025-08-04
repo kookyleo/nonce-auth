@@ -81,7 +81,7 @@ impl RedisStorage {
     /// ```
     pub fn new(redis_url: &str, key_prefix: &str) -> Result<Self, NonceError> {
         let client = Client::open(redis_url)
-            .map_err(|e| NonceError::from_storage_message(format!("Redis client error: {}", e)))?;
+            .map_err(|e| NonceError::from_storage_message(format!("Redis client error: {e}")))?;
 
         Ok(Self {
             client,
@@ -116,7 +116,7 @@ impl RedisStorage {
             .get_multiplexed_tokio_connection()
             .await
             .map_err(|e| {
-                NonceError::from_storage_message(format!("Redis connection failed: {}", e))
+                NonceError::from_storage_message(format!("Redis connection failed: {e}"))
             })?;
 
         *conn_guard = Some(new_conn.clone());
@@ -217,7 +217,7 @@ impl NonceStorage for RedisStorage {
         let _: String = redis::cmd("PING")
             .query_async(&mut conn)
             .await
-            .map_err(|e| NonceError::from_storage_message(format!("Redis ping failed: {}", e)))?;
+            .map_err(|e| NonceError::from_storage_message(format!("Redis ping failed: {e}")))?;
 
         Ok(())
     }
@@ -553,7 +553,7 @@ mod tests {
 
         // Multiple operations should reuse the same connection
         for i in 0..10 {
-            let nonce = format!("conn-test-{}", i);
+            let nonce = format!("conn-test-{i}");
             storage
                 .set(&nonce, None, Duration::from_secs(60))
                 .await
@@ -578,7 +578,7 @@ mod tests {
 
         // Add many nonces
         for i in 0..100 {
-            let nonce = format!("scan-test-{}", i);
+            let nonce = format!("scan-test-{i}");
             storage
                 .set(&nonce, None, Duration::from_secs(300))
                 .await

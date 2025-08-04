@@ -553,7 +553,7 @@ mod tests {
             let storage_clone = std::sync::Arc::clone(&storage);
             let handle = tokio::spawn(async move {
                 storage_clone
-                    .set(&format!("nonce-{}", i), None, Duration::from_secs(300))
+                    .set(&format!("nonce-{i}"), None, Duration::from_secs(300))
                     .await
             });
             handles.push(handle);

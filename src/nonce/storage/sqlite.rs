@@ -290,8 +290,7 @@ impl NonceStorage for SqliteStorage {
         Ok(StorageStats {
             total_records: count,
             backend_info: format!(
-                "SQLite storage ({} bytes, {} pages, {})",
-                size_bytes, db_size, mode
+                "SQLite storage ({size_bytes} bytes, {db_size} pages, {mode})"
             ),
         })
     }

@@ -353,7 +353,7 @@ impl CredentialVerifier {
         signature: &str,
     ) -> Result<bool, NonceError> {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac.update(timestamp.to_string().as_bytes());
         mac.update(nonce.as_bytes());
@@ -374,7 +374,7 @@ impl CredentialVerifier {
         signature: &str,
     ) -> Result<bool, NonceError> {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac.update(timestamp.to_string().as_bytes());
         mac.update(nonce.as_bytes());
@@ -400,7 +400,7 @@ impl CredentialVerifier {
         F: FnOnce(&mut HmacSha256),
     {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac_fn(&mut mac);
 

@@ -43,14 +43,10 @@ async fn verify_credential(
     // 1. Validate timestamp is within time window
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| NonceError::CryptoError(format!("Time error: {}", e)))?
+        .map_err(|e| NonceError::CryptoError(format!("Time error: {e}")))?
         .as_secs();
 
-    let time_diff = if current_time >= credential.timestamp {
-        current_time - credential.timestamp
-    } else {
-        credential.timestamp - current_time
-    };
+    let time_diff = current_time.abs_diff(credential.timestamp);
 
     if time_diff > time_window.as_secs() {
         return Err(NonceError::TimestampOutOfWindow);
@@ -59,7 +55,7 @@ async fn verify_credential(
     // 2. Verify signature
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(secret)
-        .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+        .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
     mac.update(credential.timestamp.to_string().as_bytes());
     mac.update(credential.nonce.as_bytes());
@@ -458,7 +454,7 @@ async fn handle_protected_request(
     // Convert hex PSK to bytes
     let psk_bytes = hex::decode(&psk)
         .inspect_err(|e| {
-            println!("Failed to decode PSK: {}", e);
+            println!("Failed to decode PSK: {e}");
         })
         .unwrap_or_else(|_| psk.as_bytes().to_vec());
 

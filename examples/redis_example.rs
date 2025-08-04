@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match storage.init().await {
         Ok(_) => println!("✅ Connected to Redis successfully!"),
         Err(e) => {
-            eprintln!("❌ Failed to connect to Redis: {}", e);
+            eprintln!("❌ Failed to connect to Redis: {e}");
             eprintln!("   Make sure Redis is running on localhost:6379 with password 'passwd'");
             return Err(e.into());
         }
@@ -63,8 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check if nonces exist
     let exists1 = storage.exists("example-nonce-1", None).await?;
     let exists2 = storage.exists("example-nonce-2", Some("user-auth")).await?;
-    println!("✅ Nonce 1 exists: {}", exists1);
-    println!("✅ Nonce 2 exists: {}", exists2);
+    println!("✅ Nonce 1 exists: {exists1}");
+    println!("✅ Nonce 2 exists: {exists2}");
 
     // Retrieve nonces
     if let Some(entry) = storage.get("example-nonce-1", None).await? {
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set("example-nonce-1", None, Duration::from_secs(300))
         .await
     {
-        Err(e) => println!("✅ Duplicate nonce correctly rejected: {}", e),
+        Err(e) => println!("✅ Duplicate nonce correctly rejected: {e}"),
         Ok(_) => println!("❌ Duplicate nonce should have been rejected"),
     }
 
@@ -105,10 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let no_ctx_exists = storage.exists("shared-nonce", None).await?;
     let wrong_ctx_exists = storage.exists("shared-nonce", Some("context-3")).await?;
 
-    println!("  Context-1: {}", ctx1_exists);
-    println!("  Context-2: {}", ctx2_exists);
-    println!("  No context: {}", no_ctx_exists);
-    println!("  Wrong context: {}", wrong_ctx_exists);
+    println!("  Context-1: {ctx1_exists}");
+    println!("  Context-2: {ctx2_exists}");
+    println!("  No context: {no_ctx_exists}");
+    println!("  Wrong context: {wrong_ctx_exists}");
 
     println!("\n3. Performance with Connection Pooling");
     println!("--------------------------------------");
@@ -117,12 +117,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
     for i in 0..100 {
         storage
-            .set(&format!("perf-test-{}", i), None, Duration::from_secs(60))
+            .set(&format!("perf-test-{i}"), None, Duration::from_secs(60))
             .await?;
     }
     let elapsed = start.elapsed();
 
-    println!("✅ 100 sequential operations completed in {:?}", elapsed);
+    println!("✅ 100 sequential operations completed in {elapsed:?}");
     println!(
         "   Average: {:.2}ms per operation",
         elapsed.as_millis() as f64 / 100.0
@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let storage_clone = storage.clone();
         tasks.spawn(async move {
             for i in 0..20 {
-                let nonce = format!("concurrent-{}-{}", task_id, i);
+                let nonce = format!("concurrent-{task_id}-{i}");
                 storage_clone
                     .set(&nonce, None, Duration::from_secs(60))
                     .await
@@ -153,8 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let elapsed = start.elapsed();
 
     println!(
-        "✅ 100 concurrent operations (5 tasks × 20) completed in {:?}",
-        elapsed
+        "✅ 100 concurrent operations (5 tasks × 20) completed in {elapsed:?}"
     );
     println!("   Rate: {:.0} ops/second", 100.0 / elapsed.as_secs_f64());
 
@@ -176,14 +175,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check immediately
     let exists_now = storage.exists("short-ttl-nonce", None).await?;
-    println!("   Exists immediately: {}", exists_now);
+    println!("   Exists immediately: {exists_now}");
 
     // Wait and check again
     println!("   Waiting 3 seconds...");
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let exists_after = storage.exists("short-ttl-nonce", None).await?;
-    println!("   Exists after TTL: {}", exists_after);
+    println!("   Exists after TTL: {exists_after}");
 
     println!("\n7. Cleanup Operations");
     println!("--------------------");
@@ -193,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deleted = storage.cleanup_expired(9999999999).await?;
     let cleanup_elapsed = cleanup_start.elapsed();
 
-    println!("✅ Cleaned up {} entries in {:?}", deleted, cleanup_elapsed);
+    println!("✅ Cleaned up {deleted} entries in {cleanup_elapsed:?}");
     println!(
         "   Cleanup rate: {:.0} entries/second",
         deleted as f64 / cleanup_elapsed.as_secs_f64()

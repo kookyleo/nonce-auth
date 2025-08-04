@@ -233,7 +233,7 @@ pub mod hmac_sha256 {
         /// Create an HMAC instance for internal use.
         fn create_hmac(&self) -> Result<Hmac<Sha256>, NonceError> {
             Hmac::<Sha256>::new_from_slice(&self.key)
-                .map_err(|e| NonceError::CryptoError(format!("Invalid HMAC key: {}", e)))
+                .map_err(|e| NonceError::CryptoError(format!("Invalid HMAC key: {e}")))
         }
     }
 
@@ -264,7 +264,7 @@ pub mod hmac_sha256 {
             // Decode the provided signature
             let expected_signature = base64::engine::general_purpose::STANDARD
                 .decode(signature)
-                .map_err(|e| NonceError::CryptoError(format!("Invalid base64 signature: {}", e)))?;
+                .map_err(|e| NonceError::CryptoError(format!("Invalid base64 signature: {e}")))?;
 
             // Compute the expected signature
             let mut mac = self.create_hmac()?;
@@ -313,7 +313,7 @@ pub mod hmac_sha256 {
             // Decode the provided signature
             let expected_signature = base64::engine::general_purpose::STANDARD
                 .decode(signature)
-                .map_err(|e| NonceError::CryptoError(format!("Invalid base64 signature: {}", e)))?;
+                .map_err(|e| NonceError::CryptoError(format!("Invalid base64 signature: {e}")))?;
 
             // Compute the expected signature using the same process as signing
             let mut mac = self.create_hmac()?;

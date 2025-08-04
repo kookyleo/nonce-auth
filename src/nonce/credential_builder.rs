@@ -286,7 +286,7 @@ impl CredentialBuilder {
         payload: &[u8],
     ) -> Result<String, NonceError> {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac.update(timestamp.to_string().as_bytes());
         mac.update(nonce.as_bytes());
@@ -305,7 +305,7 @@ impl CredentialBuilder {
         components: &[&[u8]],
     ) -> Result<String, NonceError> {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac.update(timestamp.to_string().as_bytes());
         mac.update(nonce.as_bytes());
@@ -329,7 +329,7 @@ impl CredentialBuilder {
         F: FnOnce(&mut HmacSha256, &str, &str),
     {
         let mut mac = HmacSha256::new_from_slice(secret)
-            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {}", e)))?;
+            .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
 
         mac_fn(&mut mac, &timestamp.to_string(), nonce);
 
@@ -378,7 +378,7 @@ mod tests {
         let credential = CredentialBuilder::new(b"secret")
             .with_nonce_generator(move || {
                 let id = counter_clone.fetch_add(1, Ordering::SeqCst);
-                format!("custom-{:010}", id)
+                format!("custom-{id:010}")
             })
             .sign(b"payload")
             .unwrap();
