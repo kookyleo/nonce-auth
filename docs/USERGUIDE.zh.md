@@ -1,7 +1,5 @@
 # Nonce Auth - 用户指南
 
-基于 nonce-auth v0.5.0 库的实用指南，涵盖所有 API、使用模式和配置选项。
-
 ## 目录
 
 1. [快速开始](#快速开始)
@@ -512,4 +510,3 @@ pub fn check_time_sync(credential: &NonceCredential) -> bool {
 
 ---
 
-这份用户指南基于 nonce-auth v0.5.0 的实际 API 编写，确保内容准确可靠。如有问题请参考项目的 GitHub 仓库获取最新信息。
