@@ -112,7 +112,7 @@ Builder for creating signed credentials.
 
 ### CredentialVerifier
 
-Verifier for validating credentials.
+Verifier for validating credentials. The verifier is `Send + Sync` and can be safely shared across threads using `Arc<CredentialVerifier>`, making it ideal for server environments.
 
 #### Constructor Methods
 
@@ -128,9 +128,9 @@ Verifier for validating credentials.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `verify` | `verify(mut self, credential: &NonceCredential, payload: &[u8]) -> Result<(), NonceError>` | Verify single payload |
-| `verify_structured` | `verify_structured(mut self, credential: &NonceCredential, components: &[&[u8]]) -> Result<(), NonceError>` | Verify multiple components |
-| `verify_with` | `verify_with<F>(mut self, credential: &NonceCredential, mac_fn: F) -> Result<(), NonceError>` | Verify with custom MAC function |
+| `verify` | `verify(self, credential: &NonceCredential, payload: &[u8]) -> Result<(), NonceError>` | Verify single payload |
+| `verify_structured` | `verify_structured(self, credential: &NonceCredential, components: &[&[u8]]) -> Result<(), NonceError>` | Verify multiple components |
+| `verify_with` | `verify_with<F>(self, credential: &NonceCredential, mac_fn: F) -> Result<(), NonceError>` | Verify with custom MAC function |
 
 ### Function Types
 

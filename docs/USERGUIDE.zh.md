@@ -112,7 +112,7 @@ pub struct NonceCredential {
 
 ### CredentialVerifier
 
-用于验证凭证的验证器。
+用于验证凭证的验证器。验证器实现了 `Send + Sync`，可以通过 `Arc<CredentialVerifier>` 安全地在多线程间共享，非常适合服务器环境。
 
 #### 构造方法
 
@@ -128,9 +128,9 @@ pub struct NonceCredential {
 
 | 方法 | 签名 | 描述 |
 |------|------|------|
-| `verify` | `verify(mut self, credential: &NonceCredential, payload: &[u8]) -> Result<(), NonceError>` | 验证单个载荷 |
-| `verify_structured` | `verify_structured(mut self, credential: &NonceCredential, components: &[&[u8]]) -> Result<(), NonceError>` | 验证多个组件 |
-| `verify_with` | `verify_with<F>(mut self, credential: &NonceCredential, mac_fn: F) -> Result<(), NonceError>` | 使用自定义 MAC 函数验证 |
+| `verify` | `verify(self, credential: &NonceCredential, payload: &[u8]) -> Result<(), NonceError>` | 验证单个载荷 |
+| `verify_structured` | `verify_structured(self, credential: &NonceCredential, components: &[&[u8]]) -> Result<(), NonceError>` | 验证多个组件 |
+| `verify_with` | `verify_with<F>(self, credential: &NonceCredential, mac_fn: F) -> Result<(), NonceError>` | 使用自定义 MAC 函数验证 |
 
 ### 函数类型
 

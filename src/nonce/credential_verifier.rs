@@ -27,6 +27,10 @@ type SecretProviderFn = Box<
 /// `CredentialVerifier` provides a fluent interface for configuring and verifying
 /// `NonceCredential` instances. It supports various verification methods including
 /// dynamic secret resolution and context isolation.
+///
+/// This verifier is `Send + Sync` and can be safely shared across threads using
+/// `Arc<CredentialVerifier>`, making it suitable for server environments with
+/// high concurrency requirements.
 pub struct CredentialVerifier {
     storage: Arc<dyn NonceStorage>,
     secret: Option<Vec<u8>>,

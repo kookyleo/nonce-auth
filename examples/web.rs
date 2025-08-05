@@ -1,11 +1,18 @@
-use base64::Engine;
-use hmac::{Hmac, Mac};
-use nonce_auth::{NonceCredential, NonceError, storage::MemoryStorage, storage::NonceStorage};
+/// Web server example demonstrating nonce-auth in a multi-session environment.
+/// 
+/// This example showcases the thread-safe nature of CredentialVerifier (Send + Sync),
+/// allowing it to be used directly in server environments without manual verification.
+/// 
+/// Key improvements:
+/// - Direct use of CredentialVerifier instead of manual verification
+/// - Proper storage sharing across requests for nonce replay protection
+/// - Simplified code with better maintainability
+
+use nonce_auth::{CredentialVerifier, storage::MemoryStorage, storage::NonceStorage};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use warp::Filter;
 
 #[derive(Deserialize)]
@@ -31,50 +38,6 @@ fn generate_psk() -> String {
     hex::encode(key)
 }
 
-// Manual verification function to avoid CredentialVerifier Sync issues
-async fn verify_credential(
-    credential: &NonceCredential,
-    payload: &[u8],
-    secret: &[u8],
-    storage: Arc<dyn NonceStorage>,
-    time_window: Duration,
-    storage_ttl: Duration,
-) -> Result<(), NonceError> {
-    // 1. Validate timestamp is within time window
-    let current_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| NonceError::CryptoError(format!("Time error: {e}")))?
-        .as_secs();
-
-    let time_diff = current_time.abs_diff(credential.timestamp);
-
-    if time_diff > time_window.as_secs() {
-        return Err(NonceError::TimestampOutOfWindow);
-    }
-
-    // 2. Verify signature
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(secret)
-        .map_err(|e| NonceError::CryptoError(format!("Invalid secret key: {e}")))?;
-
-    mac.update(credential.timestamp.to_string().as_bytes());
-    mac.update(credential.nonce.as_bytes());
-    mac.update(payload);
-
-    let expected_signature =
-        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
-    if expected_signature != credential.signature {
-        return Err(NonceError::InvalidSignature);
-    }
-
-    // 3. Check nonce uniqueness and store if unique
-    if storage.exists(&credential.nonce, None).await? {
-        return Err(NonceError::DuplicateNonce);
-    }
-
-    storage.set(&credential.nonce, None, storage_ttl).await?;
-    Ok(())
-}
 
 // Function to generate HTML with embedded PSK and session ID
 fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
@@ -458,16 +421,13 @@ async fn handle_protected_request(
         })
         .unwrap_or_else(|_| psk.as_bytes().to_vec());
 
-    // Manual verification to avoid CredentialVerifier Sync issues
-    let result = verify_credential(
-        &req.auth,
-        req.payload.as_bytes(),
-        &psk_bytes,
-        storage,
-        Duration::from_secs(15), // time window
-        Duration::from_secs(60), // storage ttl
-    )
-    .await;
+    // Use CredentialVerifier directly (now supports Sync!)
+    let result = CredentialVerifier::new(storage)
+        .with_secret(&psk_bytes)
+        .with_time_window(Duration::from_secs(15))
+        .with_storage_ttl(Duration::from_secs(60))
+        .verify(&req.auth, req.payload.as_bytes())
+        .await;
 
     match result {
         Ok(()) => {
