@@ -14,11 +14,11 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// A function that provides secrets dynamically based on context.
 type SecretProviderFn = Box<
-    dyn for<'a> FnOnce(
+    dyn for<'a> Fn(
             Option<&'a str>,
         )
             -> Pin<Box<dyn Future<Output = Result<Vec<u8>, NonceError>> + Send + 'a>>
-        + Send,
+        + Send + Sync,
 >;
 
 /// Verifier for cryptographic credentials.
@@ -155,7 +155,7 @@ impl CredentialVerifier {
     /// ```
     pub fn with_secret_provider<P, F>(mut self, provider: P) -> Self
     where
-        P: for<'a> FnOnce(Option<&'a str>) -> F + Send + 'static,
+        P: for<'a> Fn(Option<&'a str>) -> F + Send + Sync + 'static,
         F: Future<Output = Result<Vec<u8>, NonceError>> + Send + 'static,
     {
         self.secret_provider = Some(Box::new(move |context| Box::pin(provider(context))));
@@ -195,11 +195,11 @@ impl CredentialVerifier {
     /// # }
     /// ```
     pub async fn verify(
-        mut self,
+        self,
         credential: &NonceCredential,
         payload: &[u8],
     ) -> Result<(), NonceError> {
-        let secret = if let Some(provider) = self.secret_provider.take() {
+        let secret = if let Some(ref provider) = self.secret_provider {
             provider(self.context.as_deref()).await?
         } else if let Some(ref secret) = self.secret {
             secret.clone()
@@ -248,11 +248,11 @@ impl CredentialVerifier {
     /// # }
     /// ```
     pub async fn verify_structured(
-        mut self,
+        self,
         credential: &NonceCredential,
         components: &[&[u8]],
     ) -> Result<(), NonceError> {
-        let secret = if let Some(provider) = self.secret_provider.take() {
+        let secret = if let Some(ref provider) = self.secret_provider {
             provider(self.context.as_deref()).await?
         } else if let Some(ref secret) = self.secret {
             secret.clone()
@@ -314,14 +314,14 @@ impl CredentialVerifier {
     /// # }
     /// ```
     pub async fn verify_with<F>(
-        mut self,
+        self,
         credential: &NonceCredential,
         mac_fn: F,
     ) -> Result<(), NonceError>
     where
         F: FnOnce(&mut HmacSha256),
     {
-        let secret = if let Some(provider) = self.secret_provider.take() {
+        let secret = if let Some(ref provider) = self.secret_provider {
             provider(self.context.as_deref()).await?
         } else if let Some(ref secret) = self.secret {
             secret.clone()
@@ -671,5 +671,25 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(NonceError::CryptoError(_))));
+    }
+
+    #[test]
+    fn test_credential_verifier_implements_sync() {
+        // This test will only compile if CredentialVerifier implements Sync
+        fn assert_sync<T: Sync>() {}
+        assert_sync::<CredentialVerifier>();
+        
+        // Test that it can actually be shared across threads
+        let storage: Arc<dyn NonceStorage> = Arc::new(MemoryStorage::new());
+        let verifier = Arc::new(CredentialVerifier::new(storage).with_secret(b"test"));
+        
+        let verifier_clone = Arc::clone(&verifier);
+        let handle = std::thread::spawn(move || {
+            // This verifies the verifier can be moved to another thread
+            drop(verifier_clone);
+        });
+        
+        handle.join().unwrap();
+        println!("CredentialVerifier successfully implements Sync!");
     }
 }
