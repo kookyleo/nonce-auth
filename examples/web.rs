@@ -1,13 +1,12 @@
 /// Web server example demonstrating nonce-auth in a multi-session environment.
-/// 
+///
 /// This example showcases the thread-safe nature of CredentialVerifier (Send + Sync),
 /// allowing it to be used directly in server environments without manual verification.
-/// 
+///
 /// Key improvements:
 /// - Direct use of CredentialVerifier instead of manual verification
 /// - Proper storage sharing across requests for nonce replay protection
 /// - Simplified code with better maintainability
-
 use nonce_auth::{CredentialVerifier, storage::MemoryStorage, storage::NonceStorage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,7 +36,6 @@ fn generate_psk() -> String {
     rng.fill_bytes(&mut key);
     hex::encode(key)
 }
-
 
 // Function to generate HTML with embedded PSK and session ID
 fn generate_html_with_psk_and_session(psk: &str, session_id: &str) -> String {
