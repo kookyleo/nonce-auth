@@ -18,7 +18,8 @@ type SecretProviderFn = Box<
             Option<&'a str>,
         )
             -> Pin<Box<dyn Future<Output = Result<Vec<u8>, NonceError>> + Send + 'a>>
-        + Send + Sync,
+        + Send
+        + Sync,
 >;
 
 /// Verifier for cryptographic credentials.
@@ -678,17 +679,17 @@ mod tests {
         // This test will only compile if CredentialVerifier implements Sync
         fn assert_sync<T: Sync>() {}
         assert_sync::<CredentialVerifier>();
-        
+
         // Test that it can actually be shared across threads
         let storage: Arc<dyn NonceStorage> = Arc::new(MemoryStorage::new());
         let verifier = Arc::new(CredentialVerifier::new(storage).with_secret(b"test"));
-        
+
         let verifier_clone = Arc::clone(&verifier);
         let handle = std::thread::spawn(move || {
             // This verifies the verifier can be moved to another thread
             drop(verifier_clone);
         });
-        
+
         handle.join().unwrap();
         println!("CredentialVerifier successfully implements Sync!");
     }
