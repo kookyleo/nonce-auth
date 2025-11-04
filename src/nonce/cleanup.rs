@@ -242,7 +242,7 @@ mod tests {
             let counter = Arc::clone(&counter_clone);
             async move {
                 let count = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                count % 2 == 0 // Cleanup every second call
+                count.is_multiple_of(2) // Cleanup every second call
             }
         });
 
